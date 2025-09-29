@@ -1,26 +1,25 @@
 [toolchain]
-rustc = "1.79.0"
 anchor_version = "0.31.1"
 
 [features]
-seeds = false
+resolution = true
 skip-lint = false
 
-[programs.localnet]
-sharely_contract = "DbQR4rMc28VGrxuJhDZqMFbi4xvF2s7Hz1hefm55ok3T"
-
 [programs.devnet]
-sharely_contract = "DbQR4rMc28VGrxuJhDZqMFbi4xvF2s7Hz1hefm55ok3T"
+sharely_contract = "HJyecYPWdo8mfoXYn5qL5wuMVSZ8ysrM9n5xwNpYd3Fs"
+
+[programs.localnet]
+sharely_contract = "HJyecYPWdo8mfoXYn5qL5wuMVSZ8ysrM9n5xwNpYd3Fs"
 
 [programs.mainnet]
-sharely_contract = "DbQR4rMc28VGrxuJhDZqMFbi4xvF2s7Hz1hefm55ok3T"
+sharely_contract = "HJyecYPWdo8mfoXYn5qL5wuMVSZ8ysrM9n5xwNpYd3Fs"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
 cluster = "devnet"
-wallet = "/Users/pengkang/.config/solana/id.json"
+wallet = "~/.config/solana/id.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

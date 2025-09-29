@@ -5,7 +5,9 @@ use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_check
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("DbQR4rMc28VGrxuJhDZqMFbi4xvF2s7Hz1hefm55ok3T");
+declare_id!("HJyecYPWdo8mfoXYn5qL5wuMVSZ8ysrM9n5xwNpYd3Fs");
+
+const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv");
 
 #[program]
 pub mod sharely_contract {
@@ -18,16 +20,19 @@ pub mod sharely_contract {
         total_amount: u64,
         start_at: i64,
         end_at: i64,
-        admin_pubkey: Pubkey,
         approval_bytes: Vec<u8>,
     ) -> Result<()> {
         require!(total_amount > 0, SharelyError::InvalidAmount);
         require!(end_at > start_at, SharelyError::InvalidArgument);
         // 校验 ed25519 签名，并核对消息体
-        verify_ed25519_signature(&ctx.accounts.instructions, &admin_pubkey, &approval_bytes)?;
+        verify_ed25519_signature(
+            &ctx.accounts.instructions,
+            &AUTHORIZED_ADMIN,
+            &approval_bytes,
+        )?;
         verify_approval_message(
             &approval_bytes,
-            &admin_pubkey,
+            &AUTHORIZED_ADMIN,
             &ctx.accounts.merchant.key(),
             &ctx.accounts.mint.key(),
             &quest_id,
@@ -65,16 +70,15 @@ pub mod sharely_contract {
         quest.vault = ctx.accounts.vault.key();
         quest.vault_authority = ctx.accounts.vault_authority.key();
         quest.merchant = ctx.accounts.merchant.key();
-        quest.admin = admin_pubkey;
+        quest.admin = AUTHORIZED_ADMIN;
         quest.merkle_root = [0u8; 32];
         quest.claimed_total = 0;
-        quest.status = Status::Paused; // 未启动
+        quest.status = Status::Pending; // 未启动
         quest.version = 1;
         quest.start_at = start_at;
         quest.end_at = end_at;
         quest.total_amount = total_amount;
         quest.funded_amount = 0;
-        quest.is_started = false;
 
         // 商户注资 total_amount 到 vault
         let cpi_ctx = CpiContext::new(
@@ -87,7 +91,19 @@ pub mod sharely_contract {
         );
         token::transfer(cpi_ctx, total_amount)?;
         quest.funded_amount = total_amount;
+
+        emit!(QuestCreated {
+            quest: quest.key(),
+            quest_id,
+            merchant: ctx.accounts.merchant.key(),
+            mint: ctx.accounts.mint.key(),
+            total_amount,
+            start_at,
+            end_at,
+        });
+
         emit!(VaultFunded {
+            funder: ctx.accounts.merchant.key(),
             quest: quest.key(),
             amount: total_amount
         });
@@ -113,17 +129,41 @@ pub mod sharely_contract {
         quest.merkle_root = new_merkle_root;
         quest.version = quest.version.checked_add(1).ok_or(SharelyError::Overflow)?;
 
-        // 初始化位图
+        // 位图由 init_if_needed 自动创建，这里只需要更新数据
         let bitmap_size = (user_count + 7) / 8; // 向上取整到字节
+        let required_space = 8 + 32 + 2 + 4 + 4 + 4 + bitmap_size as usize;
+
+        // 检查空间是否足够，如果不够则重新分配
+        let account_info = ctx.accounts.bitmap_shard.to_account_info();
+        let current_space = account_info.data_len();
+        if required_space > current_space {
+            account_info.realloc(required_space, false)?;
+            let additional_lamports = Rent::get()?.minimum_balance(required_space)
+                - Rent::get()?.minimum_balance(current_space);
+            anchor_lang::system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    anchor_lang::system_program::Transfer {
+                        from: ctx.accounts.admin.to_account_info(),
+                        to: account_info,
+                    },
+                ),
+                additional_lamports,
+            )?;
+        }
         let shard = &mut ctx.accounts.bitmap_shard;
-        shard.quest = quest.key();
-        shard.shard_id = 0; // 固定为 0，不再使用分片概念
         shard.user_count = user_count;
-        shard.bits = vec![0u8; bitmap_size as usize];
+        shard.shard_id = 0;
+        shard.quest = quest.key();
+        shard.bits = vec![0; bitmap_size as usize];
 
         // 启动 quest
-        quest.is_started = true;
         quest.status = Status::Active;
+
+        emit!(QuestStatusChanged {
+            quest: quest.key(),
+            status: quest.status
+        });
 
         emit!(MerkleRootSet {
             quest: quest.key(),
@@ -193,10 +233,7 @@ pub mod sharely_contract {
 
     pub fn claim(ctx: Context<Claim>, index: u64, amount: u64, proof: Vec<[u8; 32]>) -> Result<()> {
         let quest = &mut ctx.accounts.quest;
-        require!(
-            quest.status == Status::Active && quest.is_started,
-            SharelyError::QuestNotActive
-        );
+        require!(quest.status == Status::Active, SharelyError::QuestNotActive);
         let now_ts = Clock::get()?.unix_timestamp;
         require!(now_ts >= quest.start_at, SharelyError::InvalidStatus);
         require!(now_ts <= quest.end_at, SharelyError::InvalidStatus);
@@ -361,7 +398,6 @@ pub struct QuestAccount {
     pub end_at: i64,
     pub total_amount: u64,
     pub funded_amount: u64,
-    pub is_started: bool,
 }
 
 #[account]
@@ -374,6 +410,7 @@ pub struct ClaimBitmapShard {
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
+    Pending,
     Active,
     Paused,
     Ended,
@@ -386,8 +423,7 @@ pub enum Status {
 #[derive(Accounts)]
 #[instruction(quest_id: u64)]
 pub struct InitializeQuestByMerchant<'info> {
-    /// CHECK: admin pubkey will be verified via ed25519
-    pub admin: UncheckedAccount<'info>,
+    // 移除 admin 账户，因为使用固定公钥验证
     #[account(mut)]
     pub merchant: Signer<'info>,
     #[account(mut)]
@@ -408,8 +444,7 @@ pub struct InitializeQuestByMerchant<'info> {
     // + 8 (end_at)
     // + 8 (total_amount)
     // + 8 (funded_amount)
-    // + 1 (is_started)
-    #[account(init, payer = merchant, space = 8 + 8 + 32 + 32 + 32 + 32 + 8 + 1 + 4 + 32 + 32 + 8 + 8 + 8 + 8 + 1, seeds = [b"quest".as_ref(), &quest_id.to_le_bytes()], bump)]
+    #[account(init, payer = merchant, space = 8 + 8 + 32 + 32 + 32 + 32 + 8 + 1 + 4 + 32 + 32 + 8 + 8 + 8 + 8, seeds = [b"quest".as_ref(), &quest_id.to_le_bytes()], bump)]
     pub quest: Account<'info, QuestAccount>,
     pub mint: Account<'info, Mint>,
     /// CHECK: PDA authority derived by program
@@ -443,7 +478,7 @@ pub struct SetMerkleRootWithBitmap<'info> {
     #[account(mut)]
     pub quest: Account<'info, QuestAccount>,
     /// CHECK: 动态大小的位图
-    #[account(init, payer = admin, space = 8 + 32 + 2 + 4 + 4 + 4 + ((user_count + 7) / 8) as usize, seeds = [b"bitmap", quest.key().as_ref()], bump)]
+    #[account(init_if_needed, payer = admin, space = 8 + 32 + 2 + 4 + 4 + 4 + 1, seeds = [b"bitmap", quest.key().as_ref()], bump)]
     pub bitmap_shard: Account<'info, ClaimBitmapShard>,
     pub system_program: Program<'info, System>,
 }
@@ -506,15 +541,29 @@ pub struct CloseQuest<'info> {
 // =========================
 
 #[event]
+pub struct QuestCreated {
+    pub quest: Pubkey,
+    pub quest_id: u64,
+    pub merchant: Pubkey,
+    pub mint: Pubkey,
+    pub total_amount: u64,
+    pub start_at: i64,
+    pub end_at: i64,
+}
+
+#[event]
 pub struct QuestStatusChanged {
     pub quest: Pubkey,
     pub status: Status,
 }
+
 #[event]
 pub struct VaultFunded {
+    pub funder: Pubkey,
     pub quest: Pubkey,
     pub amount: u64,
 }
+
 #[event]
 pub struct MerkleRootSet {
     pub quest: Pubkey,

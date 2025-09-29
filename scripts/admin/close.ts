@@ -22,7 +22,10 @@ const DESTINATION_ATA = process.env.DESTINATION_ATA || '';
     if (DESTINATION_ATA) {
         destinationAta = asPubkey(DESTINATION_ATA);
     } else {
-        destinationAta = await getAssociatedTokenAddress(mint, provider.wallet.publicKey, true);
+        console.log('Using merchant ATA as destination ATA');
+        const MERCHANT_PUBKEY = process.env.MERCHANT_PUBKEY || '';
+        const merchant = asPubkey(MERCHANT_PUBKEY);
+        destinationAta = await getAssociatedTokenAddress(mint, merchant, true);
     }
 
     // 关闭 Quest 并把剩余资金转走（需要是 quest 的管理员）

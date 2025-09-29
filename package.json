@@ -8,7 +8,11 @@
         "admin:gen-merkle": "ts-node scripts/admin/generate-merkle.ts",
         "admin:set:root": "ts-node scripts/admin/set-merkle-root.ts",
         "merchant:init": "ts-node scripts/merchant/merchant_init.ts",
-        "user:claim": "ts-node scripts/user/claim.ts"
+        "merchant:vault:auth": "ts-node scripts/merchant/vault_auth.ts",
+        "user:claim": "ts-node scripts/user/claim.ts",
+        "backend:fetch:quest": "ts-node scripts/backend/fetch_quest.ts",
+        "backend:events": "ts-node scripts/backend/scan_quests.ts",
+        "backend:account": "ts-node scripts/backend/analyze_unknown_account.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.31.1",
@@ -19,7 +23,8 @@
         "dotenv": "^16.4.5",
         "merkletreejs": "^0.3.11",
         "ts-node": "^10.9.2",
-        "tweetnacl": "^1.0.3"
+        "tweetnacl": "^1.0.3",
+        "@project-serum/borsh": "^0.10.0"
     },
     "devDependencies": {
         "@types/bn.js": "^5.1.0",

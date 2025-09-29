@@ -29,7 +29,6 @@ function i64ToLeBytes(n: bigint): Uint8Array {
     const adminSecret = parseSecret(process.env.ADMIN_SECRET_JSON);
     const admin = Keypair.fromSecretKey(adminSecret);
 
-    const programId = new PublicKey(process.env.PROGRAM_ID || '');
     const merchant = new PublicKey(process.env.MERCHANT_PUBKEY || '');
     const mint = new PublicKey(process.env.MINT_PUBKEY || '');
 

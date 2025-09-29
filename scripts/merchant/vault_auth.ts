@@ -47,41 +47,12 @@ function parseSecret(json: string | undefined): Uint8Array {
         Buffer.from('vault_auth'),
         quest.toBuffer(),
     ], program.programId);
+    console.log('vaultAuthority=', vaultAuthority.toBase58())
     const vault = getAssociatedTokenAddressSync(mint, vaultAuthority, true);
-
+    console.log('vault=', vault.toBase58())
     // Merchant source ATA
     const merchantAta = getAssociatedTokenAddressSync(mint, merchantKp.publicKey, true);
+    console.log('merchantAta=', merchantAta.toBase58())
 
-    // 1) ed25519 verify instruction
-    const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
-        publicKey: adminPubkey.toBytes(),
-        message,
-        signature,
-    });
 
-    // 2) program instruction
-    const ix2 = await program.methods
-        .initializeQuestByMerchant(new anchor.BN(questId), totalAmount, new anchor.BN(startAt), new anchor.BN(endAt), Buffer.from(message))
-        .accounts({
-            // 移除 admin 账户，因为使用固定公钥验证
-            merchant: merchantKp.publicKey,
-            merchantSourceAta: merchantAta,
-            quest,
-            mint,
-            vaultAuthority,
-            vault,
-            instructions: anchor.web3.SYSVAR_INSTRUCTIONS_PUBKEY,
-            systemProgram: anchor.web3.SystemProgram.programId,
-            tokenProgram: TOKEN_PROGRAM_ID,
-            associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
-            rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .instruction();
-
-    const tx = new Transaction().add(ed25519Ix, ix2);
-    tx.feePayer = merchantKp.publicKey;
-    tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
-    tx.sign(merchantKp);
-    const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-    console.log('tx =', sig);
 })();
