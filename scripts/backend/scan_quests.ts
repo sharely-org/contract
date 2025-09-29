@@ -332,7 +332,9 @@ class ReadOnlyQuestScanner {
         try {
             const events: any[] = [];
             const questEvents = new Map<string, any>(); // 按 quest 分组
-            let before: string | undefined;
+            let before: string | undefined; // 如果不提供，默认从最新一条交易开始往后扫描
+            let until: string | undefined; // 上次扫描到的最后一条交易签名，可以从数据库取
+
             let totalProcessed = 0;
             let pageCount = 0;
 
@@ -343,6 +345,7 @@ class ReadOnlyQuestScanner {
 
                 const signatures = await this.connection.getSignaturesForAddress(this.programId, {
                     before,
+                    until,
                     limit: 1000 // 每页最多1000个交易
                 });
 
