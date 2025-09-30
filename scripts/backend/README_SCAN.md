@@ -49,7 +49,6 @@ yarn backend:events
 1. **"没有找到任何 Quest"**
    - 检查 RPC 连接
    - 确认 Quest 确实存在
-   - 尝试增加 MAX_QUEST_ID
 
 2. **"解析 Quest 账户失败"**
    - 可能是 Quest 账户数据损坏
@@ -61,7 +60,6 @@ yarn backend:events
 
 ### 调试技巧
 
-1. 使用较小的 MAX_QUEST_ID 进行测试
 2. 检查环境变量设置
 3. 查看控制台错误信息
 4. 确认 Quest 账户状态
