@@ -2,9 +2,8 @@
 
 ## 功能概述
 
-Quest 扫描脚本提供了全面的 Quest 账户扫描和事件监听功能，包括：
+Quest 扫描脚本提供了全面的 Quest事件监听功能，包括：
 
-- 📊 显示 Quest 统计信息
 - 📜 查看 Quest 事件历史
 
 ## 使用方法
@@ -35,33 +34,6 @@ yarn backend:events
 - BitmapInitialized：位图初始化
 - QuestClosed：Quest 关闭
 
-## 示例输出
-
-```
-🔍 开始扫描 Quest 账户...
-✅ 找到 Quest 0: 7NYmJvQBjgw2tYirzSEFeDzDGZgq4XBRhyaEDU7NJfoA
-✅ 找到 Quest 1: 8OZmJvQBjgw2tYirzSEFeDzDGZgq4XBRhyaEDU7NJfoB
-📊 总共找到 2 个 Quest 账户
-
-📈 Quest 统计信息:
-==================================================
-状态分布:
-  Active: 1 个
-  Paused: 1 个
-
-资金统计:
-  总金额: 1000000000
-  已注资: 1000000000
-  已领取: 500000000
-  剩余: 500000000
-
-📋 Quest 列表:
-======================================================================================
-Quest ID Status    Started Amount         Claimed         Merchant                                    Quest Address
-----------------------------------------------------------------------------------------------
-0        Active    Yes     1000000000     500000000       CECahCnak...6uv                           7NYmJvQBjgw2tYirzSEFeDzDGZgq4XBRhyaEDU7NJfoA
-1        Paused    No      2000000000     0               CECahCnak...6uv                           8OZmJvQBjgw2tYirzSEFeDzDGZgq4XBRhyaEDU7NJfoB
-```
 
 ## 注意事项
 

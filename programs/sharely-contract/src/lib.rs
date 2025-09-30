@@ -5,7 +5,7 @@ use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_check
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("HJyecYPWdo8mfoXYn5qL5wuMVSZ8ysrM9n5xwNpYd3Fs");
+declare_id!("3DdyZ9jSBb1HWVZ1K4mZB6EZV8EURQZY4XhAoUMTU2Wx");
 
 const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv");
 
