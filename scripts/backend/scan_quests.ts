@@ -1,4 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
+import fs from 'fs';
+import path from 'path';
 import dotenv from 'dotenv';
 
 import { sha256 } from "@noble/hashes/sha256";
@@ -10,7 +12,6 @@ interface QuestInfo {
     quest: PublicKey;
     questId: number;
     status: string;
-    isStarted: boolean;
     startAt: number;
     endAt: number;
     totalAmount: number;
@@ -67,6 +68,7 @@ const bitmapInitializedLayout = borsh.struct([
 const questClosedLayout = borsh.struct([
     borsh.publicKey("quest"),
     borsh.u64("remaining_transferred"),
+    borsh.publicKey("recipient"),
 ]);
 
 function discriminatorMatch(log: string, discriminator_name: string): boolean {
@@ -241,19 +243,25 @@ function decodeQuestClosed(base64data: string) {
     return {
         type: 'QuestClosed',
         quest: new PublicKey(decoded.quest).toBase58(),
-        remainingTransferred: Number(decoded.remaining_transferred)
+        remainingTransferred: Number(decoded.remaining_transferred),
+        recipient: new PublicKey(decoded.recipient).toBase58(),
     };
 }
 
 class ReadOnlyQuestScanner {
     private connection: Connection;
     private programId: PublicKey;
+    private stateFilePath: string;
 
     constructor() {
         // 创建只读连接，不需要私钥
         const url = process.env.RPC_URL || 'http://127.0.0.1:8899';
         this.connection = new Connection(url, 'confirmed');
         this.programId = new PublicKey(process.env.PROGRAM_ID || '');
+        console.log('🔍 PROGRAM_ID:', this.programId);
+        // 状态文件位于脚本同目录下的 .scan_state.json
+        const scriptDir = path.dirname(__filename);
+        this.stateFilePath = path.join(scriptDir, '.scan_state.json');
     }
 
     /**
@@ -292,7 +300,6 @@ class ReadOnlyQuestScanner {
                         quest: pubkey,
                         questId: questData.questId,
                         status: this.getStatusString(questData.status),
-                        isStarted: questData.isStarted,
                         startAt: questData.startAt,
                         endAt: questData.endAt,
                         totalAmount: questData.totalAmount,
@@ -333,12 +340,15 @@ class ReadOnlyQuestScanner {
             const events: any[] = [];
             const questEvents = new Map<string, any>(); // 按 quest 分组
             let before: string | undefined; // 如果不提供，默认从最新一条交易开始往后扫描
-            let until: string | undefined; // 上次扫描到的最后一条交易签名，可以从数据库取
+            // until 使用上次保存的最新已处理签名（增量扫描断点）
+            const lastProcessedSignature = this.readScanState();
+            let until: string | undefined = lastProcessedSignature || undefined;
+            const allSignatures: { signature: string; slot: number; blockTime: number | null }[] = [];
 
             let totalProcessed = 0;
             let pageCount = 0;
 
-            // 分页获取所有交易签名
+            // 第一步：仅分页收集所有签名（倒序返回），不立刻取交易，确保后续全局按从旧到新处理
             while (true) {
                 pageCount++;
                 console.log(`📄 获取第 ${pageCount} 页交易...`);
@@ -355,64 +365,7 @@ class ReadOnlyQuestScanner {
                 }
 
                 console.log(`📊 第 ${pageCount} 页找到 ${signatures.length} 个交易`);
-
-                // 按时间顺序处理（从旧到新）
-                for (const sig of signatures.reverse()) {
-                    try {
-                        const tx = await this.connection.getTransaction(sig.signature, {
-                            maxSupportedTransactionVersion: 0
-                        });
-                        if (tx?.meta?.logMessages) {
-                            const questLogs = tx.meta.logMessages.filter(log =>
-                                log.includes('InitializeQuestByMerchant') ||
-                                log.includes('VaultFunded') ||
-                                log.includes('QuestStatusChanged') ||
-                                log.includes('Claim') ||
-                                log.includes('SetMerkleRoot') ||
-                                log.includes('QuestClosed') ||
-                                log.includes('QuestCreated') ||
-                                log.includes('Program data:')
-                            );
-
-                            if (questLogs.length > 0) {
-
-                                // 解析事件数据
-                                const parsedEvents = this.parseEventLogs(questLogs);
-                                let questAddress = ''
-                                if (parsedEvents.length > 0 && parsedEvents[0].quest) {
-                                    questAddress = parsedEvents[0].quest;
-                                }
-                                const eventData = {
-                                    signature: sig.signature,
-                                    slot: sig.slot,
-                                    timestamp: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : 'Unknown',
-                                    quest: questAddress,
-                                    logs: questLogs,
-                                    blockTime: sig.blockTime,
-                                    parsedEvents: parsedEvents
-                                };
-
-                                events.push(eventData);
-
-                                // 按 quest 分组
-                                if (questAddress) {
-                                    if (!questEvents.has(questAddress)) {
-                                        questEvents.set(questAddress, []);
-                                    }
-                                    questEvents.get(questAddress)!.push(eventData);
-                                }
-                            }
-                        }
-
-                        totalProcessed++;
-                        if (totalProcessed % 100 === 0) {
-                            console.log(`⏳ 已处理 ${totalProcessed} 个交易...`);
-                        }
-
-                    } catch (error) {
-                        console.warn(`⚠️  解析交易 ${sig.signature} 失败:`, error);
-                    }
-                }
+                allSignatures.push(...signatures.map(s => ({ signature: s.signature, slot: s.slot, blockTime: s.blockTime ?? null })));
 
                 // 设置下一页的 before 参数
                 before = signatures[signatures.length - 1].signature;
@@ -421,6 +374,68 @@ class ReadOnlyQuestScanner {
                 if (signatures.length < 1000) {
                     break;
                 }
+            }
+
+            console.log(`🧾 共收集签名 ${allSignatures.length} 个，开始按从旧到新处理...`);
+
+            // 第二步：对所有签名做全局从旧到新排序处理
+            for (const sig of allSignatures.reverse()) {
+                try {
+                    const tx = await this.connection.getTransaction(sig.signature, {
+                        maxSupportedTransactionVersion: 0
+                    });
+                    if (tx?.meta?.logMessages) {
+                        const questLogs = tx.meta.logMessages.filter(log =>
+                            log.includes('InitializeQuestByMerchant') ||
+                            log.includes('VaultFunded') ||
+                            log.includes('QuestStatusChanged') ||
+                            log.includes('Claim') ||
+                            log.includes('SetMerkleRoot') ||
+                            log.includes('QuestClosed') ||
+                            log.includes('QuestCreated') ||
+                            log.includes('Program data:')
+                        );
+
+                        if (questLogs.length > 0) {
+                            const parsedEvents = this.parseEventLogs(questLogs);
+                            let questAddress = '';
+                            if (parsedEvents.length > 0 && parsedEvents[0].quest) {
+                                questAddress = parsedEvents[0].quest;
+                            }
+                            const eventData = {
+                                signature: sig.signature,
+                                slot: sig.slot,
+                                timestamp: sig.blockTime ? new Date(sig.blockTime * 1000).toISOString() : 'Unknown',
+                                quest: questAddress,
+                                logs: questLogs,
+                                blockTime: sig.blockTime,
+                                parsedEvents: parsedEvents
+                            };
+
+                            events.push(eventData);
+
+                            if (questAddress) {
+                                if (!questEvents.has(questAddress)) {
+                                    questEvents.set(questAddress, []);
+                                }
+                                questEvents.get(questAddress)!.push(eventData);
+                            }
+                        }
+                    }
+
+                    totalProcessed++;
+                    if (totalProcessed % 100 === 0) {
+                        console.log(`⏳ 已处理 ${totalProcessed} 个交易...`);
+                    }
+                } catch (error) {
+                    console.warn(`⚠️  解析交易 ${sig.signature} 失败:`, error);
+                }
+            }
+
+            // 更新状态：写入最新处理到的签名（即这次批量中最“新”的一个）
+            const newestSignature = allSignatures.length > 0 ? allSignatures[allSignatures.length - 1].signature : undefined;
+            if (newestSignature) {
+                this.writeScanState(newestSignature);
             }
 
             // 按时间排序（从早到晚）
@@ -785,13 +800,12 @@ class ReadOnlyQuestScanner {
         quests.forEach(quest => {
             const questId = quest.questId.toString().padEnd(8);
             const status = quest.status.padEnd(10);
-            const started = (quest.isStarted ? 'Yes' : 'No').padEnd(8);
             const amount = quest.totalAmount.toString().padEnd(15);
             const claimed = quest.claimedTotal.toString().padEnd(15);
             const merchant = quest.merchant.substring(0, 8) + '...' + quest.merchant.substring(quest.merchant.length - 8);
             const questAddr = quest.quest.toBase58();
 
-            console.log(`${questId}${status}${started}${amount}${claimed}${merchant}${questAddr}`);
+            console.log(`${questId}${status}${amount}${claimed}${merchant}${questAddr}`);
         });
     }
 
@@ -840,7 +854,7 @@ class ReadOnlyQuestScanner {
                 break;
 
             case 'VaultFunded':
-                console.log(`${indent}  Signature: ${event.funder}`);
+                console.log(`${indent}  Funder: ${event.funder}`);
                 console.log(`${indent}  Quest: ${event.quest}`);
                 console.log(`${indent}  Amount: ${event.amount}`);
                 break;
@@ -873,10 +887,36 @@ class ReadOnlyQuestScanner {
             case 'QuestClosed':
                 console.log(`${indent}  Quest: ${event.quest}`);
                 console.log(`${indent}  Remaining Transferred: ${event.remainingTransferred}`);
+                if (event.recipient) {
+                    console.log(`${indent}  Recipient: ${event.recipient}`);
+                }
                 break;
 
             default:
                 console.log(`${indent}  Unknown event type: ${event.type}`);
+        }
+    }
+
+    // 扫描状态读写
+    private readScanState(): string | null {
+        try {
+            if (!fs.existsSync(this.stateFilePath)) return null;
+            const raw = fs.readFileSync(this.stateFilePath, 'utf-8');
+            const data = JSON.parse(raw);
+            return typeof data?.lastProcessedSignature === 'string' ? data.lastProcessedSignature : null;
+        } catch (e) {
+            console.warn('读取扫描状态失败，忽略为全量扫描:', e);
+            return null;
+        }
+    }
+
+    private writeScanState(signature: string): void {
+        try {
+            const data = { lastProcessedSignature: signature, updatedAt: new Date().toISOString() };
+            fs.writeFileSync(this.stateFilePath, JSON.stringify(data, null, 2), 'utf-8');
+            console.log(`💾 已更新扫描状态，lastProcessedSignature=${signature}`);
+        } catch (e) {
+            console.warn('写入扫描状态失败：', e);
         }
     }
 
@@ -943,7 +983,6 @@ class ReadOnlyQuestScanner {
             const fundedAmount = data.readBigUInt64LE(offset);
             offset += 8;
 
-            const isStarted = data.readUInt8(offset) !== 0;
 
             return {
                 questId: Number(questId),
@@ -960,7 +999,6 @@ class ReadOnlyQuestScanner {
                 endAt: Number(endAt),
                 totalAmount: Number(totalAmount),
                 fundedAmount: Number(fundedAmount),
-                isStarted
             };
         } catch (error) {
             console.error('解析 QuestAccount 失败:', error);

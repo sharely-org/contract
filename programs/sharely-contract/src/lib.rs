@@ -5,7 +5,7 @@ use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_check
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("3DdyZ9jSBb1HWVZ1K4mZB6EZV8EURQZY4XhAoUMTU2Wx");
+declare_id!("2etMe49UuYTg9EXfimv92kzw9mBwhyr3uEvcyRCejQwL");
 
 const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv");
 
@@ -24,6 +24,11 @@ pub mod sharely_contract {
     ) -> Result<()> {
         require!(total_amount > 0, SharelyError::InvalidAmount);
         require!(end_at > start_at, SharelyError::InvalidArgument);
+        // 校验 end_at 是否大于当前时间
+        require!(
+            end_at > Clock::get()?.unix_timestamp,
+            SharelyError::InvalidArgument
+        );
         // 校验 ed25519 签名，并核对消息体
         verify_ed25519_signature(
             &ctx.accounts.instructions,
@@ -214,23 +219,6 @@ pub mod sharely_contract {
         Ok(())
     }
 
-    pub fn end_quest(ctx: Context<AdminOnQuest>) -> Result<()> {
-        require!(
-            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
-            SharelyError::Unauthorized
-        );
-        require!(
-            ctx.accounts.quest.status != Status::Ended,
-            SharelyError::InvalidStatus
-        );
-        ctx.accounts.quest.status = Status::Ended;
-        emit!(QuestStatusChanged {
-            quest: ctx.accounts.quest.key(),
-            status: ctx.accounts.quest.status
-        });
-        Ok(())
-    }
-
     pub fn claim(ctx: Context<Claim>, index: u64, amount: u64, proof: Vec<[u8; 32]>) -> Result<()> {
         let quest = &mut ctx.accounts.quest;
         require!(quest.status == Status::Active, SharelyError::QuestNotActive);
@@ -325,9 +313,11 @@ pub mod sharely_contract {
             );
             token::transfer(cpi_ctx, amount)?;
         }
+        ctx.accounts.quest.status = Status::Ended;
         emit!(QuestClosed {
             quest: ctx.accounts.quest.key(),
-            remaining_transferred: amount
+            remaining_transferred: amount,
+            recipient: ctx.accounts.destination_ata.key(),
         });
         Ok(())
     }
@@ -582,6 +572,7 @@ pub struct Claimed {
 pub struct QuestClosed {
     pub quest: Pubkey,
     pub remaining_transferred: u64,
+    pub recipient: Pubkey,
 }
 
 #[event]

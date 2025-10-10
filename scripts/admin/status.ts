@@ -21,7 +21,6 @@ const QUEST = process.env.QUEST_PUBKEY || '';
         console.log('Quest 状态:', {
             questId: questAccount.questId.toString(),
             status: questAccount.status,
-            isStarted: questAccount.isStarted,
             startAt: new Date(questAccount.startAt.toNumber() * 1000).toISOString(),
             endAt: new Date(questAccount.endAt.toNumber() * 1000).toISOString(),
             totalAmount: questAccount.totalAmount.toString(),

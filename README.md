@@ -6,6 +6,11 @@
 - rustc 1.81.0 
 - anchor-cli 0.31.1
 
+注意事项：
+rpc 选择：
+测试阶段可以用官方提供的免费的(dev: https://api.devnet.solana.com, mainnet: https://api.mainnet.solana.com )，但是官方的rpc获取交易详情时，不会返回超过一定时间以上(大概一周)的log, 会导致无法解析event, 上线时采用第三方服务的rpc(https://dashboard.quicknode.com/), 创建一个solana endpoints 即可。
+
+
 # 构建
 - 执行: carge update
 - 执行：cargo clean

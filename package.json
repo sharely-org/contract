@@ -4,6 +4,8 @@
         "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
         "admin:sign": "ts-node scripts/admin/admin_sign.ts",
         "admin:status": "ts-node scripts/admin/status.ts",
+        "admin:pause": "ts-node scripts/admin/pause.ts",
+        "admin:resume": "ts-node scripts/admin/resume.ts",
         "admin:close": "ts-node scripts/admin/close.ts",
         "admin:gen-merkle": "ts-node scripts/admin/generate-merkle.ts",
         "admin:set:root": "ts-node scripts/admin/set-merkle-root.ts",
@@ -12,7 +14,8 @@
         "user:claim": "ts-node scripts/user/claim.ts",
         "backend:fetch:quest": "ts-node scripts/backend/fetch_quest.ts",
         "backend:events": "ts-node scripts/backend/scan_quests.ts",
-        "backend:account": "ts-node scripts/backend/analyze_unknown_account.ts"
+        "backend:account": "ts-node scripts/backend/analyze_unknown_account.ts",
+        "backend:test": "ts-node scripts/backend/scan_test.ts"
     },
     "dependencies": {
         "@coral-xyz/anchor": "^0.31.1",
