@@ -36,6 +36,16 @@ export function getAdminProvider() {
     return provider;
 }
 
+export function getMerchantProvider() {
+    const url = process.env.RPC_URL || 'http://127.0.0.1:8899';
+    const connection = new Connection(url, 'confirmed');
+    const key = parseSecret(process.env.MERCHANT_SECRET_JSON);
+    const wallet = new anchor.Wallet(Keypair.fromSecretKey(key));
+    const provider = new anchor.AnchorProvider(connection, wallet, { commitment: 'confirmed' });
+    anchor.setProvider(provider);
+    return provider;
+}
+
 export function getUserProvider() {
     const url = process.env.RPC_URL || 'http://127.0.0.1:8899';
     const connection = new Connection(url, 'confirmed');

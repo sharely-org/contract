@@ -1,0 +1,47 @@
+import * as anchor from '@coral-xyz/anchor';
+import { getMerchantProvider, getProgram, asPubkey } from '../admin/common';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
+
+const QUEST = process.env.QUEST_PUBKEY || '';
+const DESTINATION_ATA = process.env.DESTINATION_ATA || '';
+
+(async () => {
+    const provider = getMerchantProvider();
+    const program = getProgram(provider);
+
+    const quest = asPubkey(QUEST);
+
+    // 获取 quest 账户信息以确定 vault 和 mint
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const questAccount = await (program.account as any)["questAccount"].fetch(quest);
+    const vault = questAccount.vault;
+    const mint = questAccount.mint;
+
+    // 如果未指定目标 ATA，则使用管理员钱包的 ATA
+    let destinationAta;
+    if (DESTINATION_ATA) {
+        destinationAta = asPubkey(DESTINATION_ATA);
+    } else {
+        console.log('Using merchant ATA as destination ATA');
+        const MERCHANT_PUBKEY = process.env.MERCHANT_PUBKEY || '';
+        const merchant = asPubkey(MERCHANT_PUBKEY);
+        destinationAta = await getAssociatedTokenAddress(mint, merchant, true);
+    }
+
+    // 关闭 Quest 并把剩余资金转走（需要是 quest 的管理员）
+    await (program.methods as any)
+        .closeQuest()
+        .accounts({
+            merchant: provider.wallet.publicKey, // merchant签名
+            quest,
+            vaultAuthority: questAccount.vaultAuthority,
+            vault,
+            destinationAta,
+            tokenProgram: TOKEN_PROGRAM_ID,
+        } as any)
+        .rpc();
+    console.log('Quest closed');
+    console.log('Remaining funds transferred to:', destinationAta.toBase58());
+})();
+
+

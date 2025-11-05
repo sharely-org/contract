@@ -102,9 +102,7 @@ pub mod sharely_contract {
             quest_id,
             merchant: ctx.accounts.merchant.key(),
             mint: ctx.accounts.mint.key(),
-            total_amount,
-            start_at,
-            end_at,
+            total_amount
         });
 
         emit!(VaultFunded {
@@ -119,11 +117,20 @@ pub mod sharely_contract {
         ctx: Context<SetMerkleRootWithBitmap>,
         new_merkle_root: [u8; 32],
         user_count: u32,
+        start_at: i64,
+        end_at: i64,
     ) -> Result<()> {
         // 仅管理员可设置 root 并启动
         require!(
             ctx.accounts.admin.key() == ctx.accounts.quest.admin,
             SharelyError::Unauthorized
+        );
+        require!(total_amount > 0, SharelyError::InvalidAmount);
+        require!(end_at > start_at, SharelyError::InvalidArgument);
+        // 校验 end_at 是否大于当前时间
+        require!(
+            end_at > Clock::get()?.unix_timestamp,
+            SharelyError::InvalidArgument
         );
         let quest = &mut ctx.accounts.quest;
         // 设置 root（允许在未启动或暂停时，且未发生任何领取）
@@ -156,24 +163,29 @@ pub mod sharely_contract {
                 additional_lamports,
             )?;
         }
+
+        quest.start_at = start_at;
+        quest.end_at = end_at;
+        // 启动 quest
+        quest.status = Status::Active;
+
         let shard = &mut ctx.accounts.bitmap_shard;
         shard.user_count = user_count;
         shard.shard_id = 0;
         shard.quest = quest.key();
         shard.bits = vec![0; bitmap_size as usize];
 
-        // 启动 quest
-        quest.status = Status::Active;
-
         emit!(QuestStatusChanged {
             quest: quest.key(),
-            status: quest.status
+            status: quest.status,
         });
 
         emit!(MerkleRootSet {
             quest: quest.key(),
             version: quest.version,
-            merkle_root: quest.merkle_root
+            merkle_root: quest.merkle_root,
+            start_at,
+            end_at
         });
 
         emit!(BitmapInitialized {
@@ -214,7 +226,7 @@ pub mod sharely_contract {
         ctx.accounts.quest.status = Status::Active;
         emit!(QuestStatusChanged {
             quest: ctx.accounts.quest.key(),
-            status: ctx.accounts.quest.status
+            status: ctx.accounts.quest.status,
         });
         Ok(())
     }
@@ -287,7 +299,7 @@ pub mod sharely_contract {
 
     pub fn close_quest(ctx: Context<CloseQuest>) -> Result<()> {
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
+            ctx.accounts.merchant.key() == ctx.accounts.quest.merchant,
             SharelyError::Unauthorized
         );
 
@@ -314,10 +326,58 @@ pub mod sharely_contract {
             token::transfer(cpi_ctx, amount)?;
         }
         ctx.accounts.quest.status = Status::Ended;
+        emit!(QuestStatusChanged {
+            quest: ctx.accounts.quest.key(),
+            status: ctx.accounts.quest.status
+        });
         emit!(QuestClosed {
             quest: ctx.accounts.quest.key(),
             remaining_transferred: amount,
             recipient: ctx.accounts.destination_ata.key(),
+        });
+        Ok(())
+    }
+
+    // only admin can cancel quest
+    pub fn cancel_quest(ctx: Context<CancelQuest>) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
+            SharelyError::Unauthorized
+        );
+        ctx.accounts.quest.status = Status::Cancelled;
+        // transfer vault amount to merchant
+
+        let amount = ctx.accounts.vault.amount;
+        if amount > 0 {
+            let bump = ctx.bumps.vault_authority;
+            let quest_key = ctx.accounts.quest.key();
+            let signer_seeds: &[&[u8]] = &[b"vault_auth", quest_key.as_ref(), &[bump]];
+            let signer = [signer_seeds];
+            // calculate merchant ata
+            let merchant_ata = anchor_spl::associated_token::get_associated_token_address(
+                &ctx.accounts.merchant.key(),
+                &ctx.accounts.vault.mint,
+            );
+            let cpi_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: merchant_ata.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                &signer,
+            );
+            token::transfer(cpi_ctx, amount)?;
+        }
+
+        emit!(QuestStatusChanged {
+            quest: ctx.accounts.quest.key(),
+            status: ctx.accounts.quest.status
+        });
+        emit!(QuestCancelled {
+            quest: ctx.accounts.quest.key(),
+            remaining_transferred: amount,
+            recipient: ctx.accounts.merchant.key(),
         });
         Ok(())
     }
@@ -404,6 +464,7 @@ pub enum Status {
     Active,
     Paused,
     Ended,
+    Cancelled,
 }
 
 // =========================
@@ -513,8 +574,8 @@ pub struct VerifyEligibility<'info> {
 #[derive(Accounts)]
 pub struct CloseQuest<'info> {
     #[account(mut)]
-    pub admin: Signer<'info>,
-    #[account(mut, has_one = admin)]
+    pub merchant: Signer<'info>,
+    #[account(mut, has_one = merchant)]
     pub quest: Account<'info, QuestAccount>,
     /// CHECK: PDA authority
     #[account(seeds = [b"vault_auth", quest.key().as_ref()], bump)]
@@ -523,6 +584,20 @@ pub struct CloseQuest<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub destination_ata: Account<'info, TokenAccount>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct CancelQuest<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(mut, has_one = admin)]
+    pub quest: Account<'info, QuestAccount>,
+    /// CHECK: PDA authority
+    #[account(seeds = [b"vault_auth", quest.key().as_ref()], bump)]
+    pub vault_authority: UncheckedAccount<'info>,
+    #[account(mut, address = quest.vault)]
+    pub vault: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -537,8 +612,6 @@ pub struct QuestCreated {
     pub merchant: Pubkey,
     pub mint: Pubkey,
     pub total_amount: u64,
-    pub start_at: i64,
-    pub end_at: i64,
 }
 
 #[event]
@@ -559,7 +632,10 @@ pub struct MerkleRootSet {
     pub quest: Pubkey,
     pub version: u32,
     pub merkle_root: [u8; 32],
+    pub start_at: i64,
+    pub end_at: i64,
 }
+
 #[event]
 pub struct Claimed {
     pub quest: Pubkey,
@@ -568,8 +644,16 @@ pub struct Claimed {
     pub amount: u64,
     pub version: u32,
 }
+
 #[event]
 pub struct QuestClosed {
+    pub quest: Pubkey,
+    pub remaining_transferred: u64,
+    pub recipient: Pubkey,
+}
+
+#[event]
+pub struct QuestCancelled {
     pub quest: Pubkey,
     pub remaining_transferred: u64,
     pub recipient: Pubkey,

@@ -71,6 +71,12 @@ const questClosedLayout = borsh.struct([
     borsh.publicKey("recipient"),
 ]);
 
+const questCancelledLayout = borsh.struct([
+    borsh.publicKey("quest"),
+    borsh.u64("remaining_transferred"),
+    borsh.publicKey("recipient"),
+]);
+
 function discriminatorMatch(log: string, discriminator_name: string): boolean {
     const discriminator = eventDiscriminator(discriminator_name);
     const data = log.match(/Program data: (.+)/);
@@ -248,6 +254,23 @@ function decodeQuestClosed(base64data: string) {
     };
 }
 
+// 解码 QuestCancelled 事件
+function decodeQuestCancelled(base64data: string) {
+    const buf = Buffer.from(base64data, "base64");
+    const disc = eventDiscriminator("QuestCancelled");
+    if (!buf.subarray(0, 8).equals(disc)) {
+        throw new Error("Not a QuestCancelled event");
+    }
+
+    const decoded = questCancelledLayout.decode(buf.subarray(8));
+    return {
+        type: 'QuestCancelled',
+        quest: new PublicKey(decoded.quest).toBase58(),
+        remainingTransferred: Number(decoded.remaining_transferred),
+        recipient: new PublicKey(decoded.recipient).toBase58(),
+    };
+}
+
 class ReadOnlyQuestScanner {
     private connection: Connection;
     private programId: PublicKey;
@@ -393,6 +416,7 @@ class ReadOnlyQuestScanner {
                             log.includes('SetMerkleRoot') ||
                             log.includes('QuestClosed') ||
                             log.includes('QuestCreated') ||
+                            log.includes('QuestCancelled') ||
                             log.includes('Program data:')
                         );
 
@@ -483,6 +507,7 @@ class ReadOnlyQuestScanner {
                     else if (log.includes('MerkleRootSet')) acc.MerkleRootSet++;
                     else if (log.includes('BitmapInitialized')) acc.BitmapInitialized++;
                     else if (log.includes('QuestClosed')) acc.QuestClosed++;
+                    else if (log.includes('QuestCancelled')) acc.QuestCancelled++;
                 });
             }
             return acc;
@@ -493,7 +518,8 @@ class ReadOnlyQuestScanner {
             Claimed: 0,
             MerkleRootSet: 0,
             BitmapInitialized: 0,
-            QuestClosed: 0
+            QuestClosed: 0,
+            QuestCancelled: 0,
         });
 
         console.log('事件类型分布:');
@@ -587,6 +613,11 @@ class ReadOnlyQuestScanner {
                 // 解析 QuestClosed 事件
                 else if (discriminatorMatch(log, 'QuestClosed')) {
                     const event = this.parseQuestClosedEvent(log);
+                    if (event) parsedEvents.push(event);
+                }
+                // 解析 QuestCancelled 事件
+                else if (discriminatorMatch(log, 'QuestCancelled')) {
+                    const event = this.parseQuestCancelledEvent(log);
                     if (event) parsedEvents.push(event);
                 }
             } catch (error) {
@@ -709,6 +740,21 @@ class ReadOnlyQuestScanner {
         }
     }
 
+    /**
+     * 解析 QuestCancelled 事件
+     */
+    private parseQuestCancelledEvent(log: string): any | null {
+        try {
+            const dataMatch = log.match(/Program data: (.+)/);
+            if (!dataMatch) return null;
+
+            const decoded = decodeQuestCancelled(dataMatch[1]);
+            return decoded;
+        } catch (error) {
+            console.warn('解析 QuestCancelled 事件失败:', error);
+            return null;
+        }
+    }
 
     /**
      * 扫描特定 quest 的事件历史
@@ -737,7 +783,8 @@ class ReadOnlyQuestScanner {
                             log.includes('Claimed') ||
                             log.includes('MerkleRootSet') ||
                             log.includes('BitmapInitialized') ||
-                            log.includes('QuestClosed')
+                            log.includes('QuestClosed') ||
+                            log.includes('QuestCancelled')
                         );
 
                         if (questLogs.length > 0) {
@@ -891,6 +938,13 @@ class ReadOnlyQuestScanner {
                     console.log(`${indent}  Recipient: ${event.recipient}`);
                 }
                 break;
+            case 'QuestCancelled':
+                console.log(`${indent}  Quest: ${event.quest}`);
+                console.log(`${indent}  Remaining Transferred: ${event.remainingTransferred}`);
+                if (event.recipient) {
+                    console.log(`${indent}  Recipient: ${event.recipient}`);
+                }
+                break;
 
             default:
                 console.log(`${indent}  Unknown event type: ${event.type}`);
@@ -926,7 +980,8 @@ class ReadOnlyQuestScanner {
             0: 'Pending',
             1: 'Active',
             2: 'Paused',
-            3: 'Ended'
+            3: 'Ended',
+            4: 'Cancelled'
         };
         return statusMap[status as keyof typeof statusMap] || 'Unknown';
     }
