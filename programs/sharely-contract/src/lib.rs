@@ -5,7 +5,7 @@ use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_check
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("2etMe49UuYTg9EXfimv92kzw9mBwhyr3uEvcyRCejQwL");
+declare_id!("3fMMnSK1H5dZk9VFQyWcPvjz5Ms3AsxA39K84pCaxGK9");
 
 const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv");
 
@@ -13,22 +13,35 @@ const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DT
 pub mod sharely_contract {
     use super::*;
 
+    // 初始化全局配置（仅管理员可调用，只需调用一次）
+    pub fn initialize_global_config(
+        ctx: Context<InitializeGlobalConfig>,
+        treasury: Pubkey,
+    ) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == AUTHORIZED_ADMIN,
+            SharelyError::Unauthorized
+        );
+        let config = &mut ctx.accounts.global_config;
+        config.treasury = treasury;
+        config.admin = ctx.accounts.admin.key();
+        emit!(GlobalConfigInitialized {
+            admin: ctx.accounts.admin.key(),
+            treasury: treasury,
+        });
+        Ok(())
+    }
+
     // 商户初始化：admin 离线签名 + ed25519 验证
     pub fn initialize_quest_by_merchant(
         ctx: Context<InitializeQuestByMerchant>,
         quest_id: u64,
         total_amount: u64,
-        start_at: i64,
-        end_at: i64,
         approval_bytes: Vec<u8>,
     ) -> Result<()> {
         require!(total_amount > 0, SharelyError::InvalidAmount);
-        require!(end_at > start_at, SharelyError::InvalidArgument);
         // 校验 end_at 是否大于当前时间
-        require!(
-            end_at > Clock::get()?.unix_timestamp,
-            SharelyError::InvalidArgument
-        );
+
         // 校验 ed25519 签名，并核对消息体
         verify_ed25519_signature(
             &ctx.accounts.instructions,
@@ -42,8 +55,6 @@ pub mod sharely_contract {
             &ctx.accounts.mint.key(),
             &quest_id,
             &total_amount,
-            &start_at,
-            &end_at,
         )?;
 
         // 手动创建 vault ATA
@@ -69,6 +80,17 @@ pub mod sharely_contract {
         );
         anchor_spl::associated_token::create(create_ata_ctx)?;
 
+        // 商户注资 total_amount 到 vault
+        let cpi_ctx = CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.merchant_source_ata.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+                authority: ctx.accounts.merchant.to_account_info(),
+            },
+        );
+        token::transfer(cpi_ctx, total_amount)?;
+
         let quest = &mut ctx.accounts.quest;
         quest.quest_id = quest_id;
         quest.mint = ctx.accounts.mint.key();
@@ -80,24 +102,14 @@ pub mod sharely_contract {
         quest.claimed_total = 0;
         quest.status = Status::Pending; // 未启动
         quest.version = 1;
-        quest.start_at = start_at;
-        quest.end_at = end_at;
+        quest.start_at = 0;
+        quest.end_at = 0;
         quest.total_amount = total_amount;
         quest.funded_amount = 0;
-
-        // 商户注资 total_amount 到 vault
-        let cpi_ctx = CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.merchant_source_ata.to_account_info(),
-                to: ctx.accounts.vault.to_account_info(),
-                authority: ctx.accounts.merchant.to_account_info(),
-            },
-        );
-        token::transfer(cpi_ctx, total_amount)?;
         quest.funded_amount = total_amount;
 
         emit!(QuestCreated {
+            status: quest.status,
             quest: quest.key(),
             quest_id,
             merchant: ctx.accounts.merchant.key(),
@@ -113,19 +125,19 @@ pub mod sharely_contract {
         Ok(())
     }
 
-    pub fn set_merkle_root(
-        ctx: Context<SetMerkleRootWithBitmap>,
-        new_merkle_root: [u8; 32],
+    pub fn activate_quest(
+        ctx: Context<ActivateQuest>,
+        merkle_root: [u8; 32],
         user_count: u32,
         start_at: i64,
         end_at: i64,
+        fee_amount: u64,
     ) -> Result<()> {
         // 仅管理员可设置 root 并启动
         require!(
             ctx.accounts.admin.key() == ctx.accounts.quest.admin,
             SharelyError::Unauthorized
         );
-        require!(total_amount > 0, SharelyError::InvalidAmount);
         require!(end_at > start_at, SharelyError::InvalidArgument);
         // 校验 end_at 是否大于当前时间
         require!(
@@ -137,10 +149,16 @@ pub mod sharely_contract {
         require!(quest.claimed_total == 0, SharelyError::InvalidArgument);
         require!(user_count > 0, SharelyError::InvalidArgument);
         require!(user_count <= 1000000, SharelyError::InvalidArgument); // 限制最大 100 万用户
+                                                                        // fee amount must be greater than 0 and less than total_amount
+        require!(
+            fee_amount >= 0 && fee_amount <= quest.total_amount,
+            SharelyError::InvalidFeeAmount
+        );
 
-        quest.merkle_root = new_merkle_root;
+        // 扣除 fee_amount 到 admin 账户
+        quest.merkle_root = merkle_root;
         quest.version = quest.version.checked_add(1).ok_or(SharelyError::Overflow)?;
-
+        quest.fee_amount = fee_amount;
         // 位图由 init_if_needed 自动创建，这里只需要更新数据
         let bitmap_size = (user_count + 7) / 8; // 向上取整到字节
         let required_space = 8 + 32 + 2 + 4 + 4 + 4 + bitmap_size as usize;
@@ -175,17 +193,14 @@ pub mod sharely_contract {
         shard.quest = quest.key();
         shard.bits = vec![0; bitmap_size as usize];
 
-        emit!(QuestStatusChanged {
-            quest: quest.key(),
+        emit!(QuestActivated {
             status: quest.status,
-        });
-
-        emit!(MerkleRootSet {
             quest: quest.key(),
             version: quest.version,
             merkle_root: quest.merkle_root,
             start_at,
-            end_at
+            end_at,
+            fee_amount
         });
 
         emit!(BitmapInitialized {
@@ -297,7 +312,7 @@ pub mod sharely_contract {
         Ok(())
     }
 
-    pub fn close_quest(ctx: Context<CloseQuest>) -> Result<()> {
+    pub fn close_quest_by_merchant(ctx: Context<CloseQuestByMerchant>) -> Result<()> {
         require!(
             ctx.accounts.merchant.key() == ctx.accounts.quest.merchant,
             SharelyError::Unauthorized
@@ -308,7 +323,28 @@ pub mod sharely_contract {
             now_ts > ctx.accounts.quest.end_at,
             SharelyError::InvalidStatus
         );
-        let amount = ctx.accounts.vault.amount;
+
+        // transfer fee amount to treasury, the left amount will be transferred to merchant
+        let fee_amount = ctx.accounts.quest.fee_amount;
+        if fee_amount > 0 {
+            // 使用 vault_authority 作为签名者从 vault 转账到 treasury_ata
+            let bump = ctx.bumps.vault_authority;
+            let quest_key = ctx.accounts.quest.key();
+            let signer_seeds: &[&[u8]] = &[b"vault_auth", quest_key.as_ref(), &[bump]];
+            let signer = [signer_seeds];
+            let cpi_ctx = CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                Transfer {
+                    from: ctx.accounts.vault.to_account_info(),
+                    to: ctx.accounts.treasury_ata.to_account_info(),
+                    authority: ctx.accounts.vault_authority.to_account_info(),
+                },
+                &signer,
+            );
+            token::transfer(cpi_ctx, fee_amount)?;
+        }
+
+        let amount = ctx.accounts.vault.amount - fee_amount;
         if amount > 0 {
             let bump = ctx.bumps.vault_authority;
             let quest_key = ctx.accounts.quest.key();
@@ -325,12 +361,10 @@ pub mod sharely_contract {
             );
             token::transfer(cpi_ctx, amount)?;
         }
-        ctx.accounts.quest.status = Status::Ended;
-        emit!(QuestStatusChanged {
-            quest: ctx.accounts.quest.key(),
-            status: ctx.accounts.quest.status
-        });
+        ctx.accounts.quest.status = Status::Closed;
+
         emit!(QuestClosed {
+            status: ctx.accounts.quest.status,
             quest: ctx.accounts.quest.key(),
             remaining_transferred: amount,
             recipient: ctx.accounts.destination_ata.key(),
@@ -353,32 +387,25 @@ pub mod sharely_contract {
             let quest_key = ctx.accounts.quest.key();
             let signer_seeds: &[&[u8]] = &[b"vault_auth", quest_key.as_ref(), &[bump]];
             let signer = [signer_seeds];
-            // calculate merchant ata
-            let merchant_ata = anchor_spl::associated_token::get_associated_token_address(
-                &ctx.accounts.merchant.key(),
-                &ctx.accounts.vault.mint,
-            );
             let cpi_ctx = CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 Transfer {
                     from: ctx.accounts.vault.to_account_info(),
-                    to: merchant_ata.to_account_info(),
+                    to: ctx.accounts.merchant_ata.to_account_info(),
                     authority: ctx.accounts.vault_authority.to_account_info(),
                 },
                 &signer,
             );
             token::transfer(cpi_ctx, amount)?;
+
+            emit!(QuestCancelled {
+                status: ctx.accounts.quest.status,
+                quest: ctx.accounts.quest.key(),
+                remaining_transferred: amount,
+                recipient: ctx.accounts.quest.merchant,
+            });
         }
 
-        emit!(QuestStatusChanged {
-            quest: ctx.accounts.quest.key(),
-            status: ctx.accounts.quest.status
-        });
-        emit!(QuestCancelled {
-            quest: ctx.accounts.quest.key(),
-            remaining_transferred: amount,
-            recipient: ctx.accounts.merchant.key(),
-        });
         Ok(())
     }
 
@@ -426,6 +453,20 @@ pub mod sharely_contract {
 
         Ok(is_valid)
     }
+
+    // 更新 treasury 地址（仅管理员可调用）
+    pub fn update_treasury(ctx: Context<UpdateTreasury>, new_treasury: Pubkey) -> Result<()> {
+        require!(
+            ctx.accounts.admin.key() == ctx.accounts.global_config.admin,
+            SharelyError::Unauthorized
+        );
+        ctx.accounts.global_config.treasury = new_treasury;
+        emit!(TreasuryUpdated {
+            new_treasury,
+            admin: ctx.accounts.admin.key(),
+        });
+        Ok(())
+    }
 }
 
 // =========================
@@ -448,6 +489,7 @@ pub struct QuestAccount {
     pub end_at: i64,
     pub total_amount: u64,
     pub funded_amount: u64,
+    pub fee_amount: u64,
 }
 
 #[account]
@@ -458,12 +500,18 @@ pub struct ClaimBitmapShard {
     pub bits: Vec<u8>,   // 动态大小的位图
 }
 
+#[account]
+pub struct GlobalConfig {
+    pub admin: Pubkey,
+    pub treasury: Pubkey,
+}
+
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Pending,
     Active,
     Paused,
-    Ended,
+    Closed,
     Cancelled,
 }
 
@@ -495,7 +543,7 @@ pub struct InitializeQuestByMerchant<'info> {
     // + 8 (end_at)
     // + 8 (total_amount)
     // + 8 (funded_amount)
-    #[account(init, payer = merchant, space = 8 + 8 + 32 + 32 + 32 + 32 + 8 + 1 + 4 + 32 + 32 + 8 + 8 + 8 + 8, seeds = [b"quest".as_ref(), &quest_id.to_le_bytes()], bump)]
+    #[account(init, payer = merchant, space = 8 + 8 + 32 + 32 + 32 + 32 + 8 + 1 + 4 + 32 + 32 + 8 + 8 + 8 + 8 + 8, seeds = [b"quest".as_ref(), &quest_id.to_le_bytes()], bump)]
     pub quest: Account<'info, QuestAccount>,
     pub mint: Account<'info, Mint>,
     /// CHECK: PDA authority derived by program
@@ -523,7 +571,7 @@ pub struct AdminOnQuest<'info> {
 
 #[derive(Accounts)]
 #[instruction(user_count: u32)]
-pub struct SetMerkleRootWithBitmap<'info> {
+pub struct ActivateQuest<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     #[account(mut)]
@@ -572,7 +620,7 @@ pub struct VerifyEligibility<'info> {
 }
 
 #[derive(Accounts)]
-pub struct CloseQuest<'info> {
+pub struct CloseQuestByMerchant<'info> {
     #[account(mut)]
     pub merchant: Signer<'info>,
     #[account(mut, has_one = merchant)]
@@ -584,6 +632,16 @@ pub struct CloseQuest<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub destination_ata: Account<'info, TokenAccount>,
+    /// 全局配置账户，包含 treasury 地址
+    #[account(seeds = [b"global_config"], bump)]
+    pub global_config: Account<'info, GlobalConfig>,
+    /// CHECK: 验证 treasury_ata 是否为授权 treasury 地址的 ATA
+    #[account(
+        mut,
+        constraint = treasury_ata.mint == quest.mint @ SharelyError::AccountMismatch,
+        constraint = treasury_ata.owner == global_config.treasury @ SharelyError::Unauthorized
+    )]
+    pub treasury_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -598,7 +656,43 @@ pub struct CancelQuest<'info> {
     pub vault_authority: UncheckedAccount<'info>,
     #[account(mut, address = quest.vault)]
     pub vault: Account<'info, TokenAccount>,
+    /// CHECK: Merchant ATA，验证地址是否正确
+    #[account(
+        mut,
+        constraint = merchant_ata.mint == vault.mint @ SharelyError::AccountMismatch,
+        constraint = merchant_ata.owner == quest.merchant @ SharelyError::AccountMismatch
+    )]
+    pub merchant_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeGlobalConfig<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: 全局配置账户，使用固定种子
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + 32 + 32, // discriminator + admin + treasury
+        seeds = [b"global_config"],
+        bump
+    )]
+    pub global_config: Account<'info, GlobalConfig>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateTreasury<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: 全局配置账户
+    #[account(
+        mut,
+        seeds = [b"global_config"],
+        bump
+    )]
+    pub global_config: Account<'info, GlobalConfig>,
 }
 
 // =========================
@@ -606,7 +700,14 @@ pub struct CancelQuest<'info> {
 // =========================
 
 #[event]
+pub struct GlobalConfigInitialized {
+    pub admin: Pubkey,
+    pub treasury: Pubkey,
+}
+
+#[event]
 pub struct QuestCreated {
+    pub status: Status,
     pub quest: Pubkey,
     pub quest_id: u64,
     pub merchant: Pubkey,
@@ -628,12 +729,14 @@ pub struct VaultFunded {
 }
 
 #[event]
-pub struct MerkleRootSet {
+pub struct QuestActivated {
+    pub status: Status,
     pub quest: Pubkey,
     pub version: u32,
     pub merkle_root: [u8; 32],
     pub start_at: i64,
     pub end_at: i64,
+    pub fee_amount: u64,
 }
 
 #[event]
@@ -647,6 +750,7 @@ pub struct Claimed {
 
 #[event]
 pub struct QuestClosed {
+    pub status: Status,
     pub quest: Pubkey,
     pub remaining_transferred: u64,
     pub recipient: Pubkey,
@@ -654,6 +758,7 @@ pub struct QuestClosed {
 
 #[event]
 pub struct QuestCancelled {
+    pub status: Status,
     pub quest: Pubkey,
     pub remaining_transferred: u64,
     pub recipient: Pubkey,
@@ -664,6 +769,12 @@ pub struct BitmapInitialized {
     pub quest: Pubkey,
     pub user_count: u32,
     pub bitmap_size: u32,
+}
+
+#[event]
+pub struct TreasuryUpdated {
+    pub new_treasury: Pubkey,
+    pub admin: Pubkey,
 }
 
 // =========================
@@ -697,6 +808,8 @@ pub enum SharelyError {
     InvalidArgument,
     #[msg("Invalid ed25519 signature")]
     InvalidSignature,
+    #[msg("Invalid fee amount")]
+    InvalidFeeAmount,
 }
 
 // =========================
@@ -769,8 +882,6 @@ fn verify_approval_message(
     mint: &Pubkey,
     quest_id: &u64,
     total_amount: &u64,
-    start_at: &i64,
-    end_at: &i64,
 ) -> Result<()> {
     // 构建期望的消息内容
     let domain = hashv(&[b"sharely:v1"]);
@@ -781,8 +892,6 @@ fn verify_approval_message(
         mint.as_ref(),
         &quest_id.to_le_bytes(),
         &total_amount.to_le_bytes(),
-        &start_at.to_le_bytes(),
-        &end_at.to_le_bytes(),
     ];
     let expected_bytes = expected_message.concat();
 

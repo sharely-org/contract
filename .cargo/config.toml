@@ -1,0 +1,5 @@
+# 注意：Anchor 可能仍会使用 Solana 自带的 Rust
+# 请在构建时设置环境变量：export CARGO_BUILD_RUSTC=$(which rustc)
+[build]
+rustc = "/Users/pengkang/.cargo/bin/rustc"
+

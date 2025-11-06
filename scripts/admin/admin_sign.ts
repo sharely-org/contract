@@ -34,8 +34,6 @@ function i64ToLeBytes(n: bigint): Uint8Array {
 
     const questId = BigInt(process.env.QUEST_ID || '0');
     const totalAmount = BigInt(process.env.TOTAL_AMOUNT || '0');
-    const startAt = BigInt(process.env.START_AT || '0');
-    const endAt = BigInt(process.env.END_AT || '0');
     const domain = sha256(new TextEncoder().encode('sharely:v1'));
     const message = new Uint8Array([
         ...domain,
@@ -44,8 +42,6 @@ function i64ToLeBytes(n: bigint): Uint8Array {
         ...mint.toBytes(),
         ...u64ToLeBytes(questId),
         ...u64ToLeBytes(totalAmount),
-        ...i64ToLeBytes(startAt),
-        ...i64ToLeBytes(endAt),
     ]);
 
     const nacl = await import('tweetnacl');

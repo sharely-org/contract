@@ -29,15 +29,15 @@ function eventDiscriminator(name: string): Buffer {
     return Buffer.from(sha256(`event:${name}`)).subarray(0, 8);
 }
 
+
 // 定义所有事件的 Borsh 布局
 const questCreatedLayout = borsh.struct([
+    borsh.u8("status"),
     borsh.publicKey("quest"),
     borsh.u64("quest_id"),
     borsh.publicKey("merchant"),
     borsh.publicKey("mint"),
     borsh.u64("total_amount"),
-    borsh.i64("start_at"),
-    borsh.i64("end_at"),
 ]);
 
 const vaultFundedLayout = borsh.struct([
@@ -65,16 +65,37 @@ const bitmapInitializedLayout = borsh.struct([
     borsh.u32("bitmap_size"),
 ]);
 
+const questActivatedLayout = borsh.struct([
+    borsh.u8("status"),
+    borsh.publicKey("quest"),
+    borsh.u32("version"),
+    borsh.array(borsh.u8(), 32, "merkle_root"),
+    borsh.i64("start_at"),
+    borsh.i64("end_at"),
+]);
+
 const questClosedLayout = borsh.struct([
+    borsh.u8("status"),
     borsh.publicKey("quest"),
     borsh.u64("remaining_transferred"),
     borsh.publicKey("recipient"),
 ]);
 
 const questCancelledLayout = borsh.struct([
+    borsh.u8("status"),
     borsh.publicKey("quest"),
     borsh.u64("remaining_transferred"),
     borsh.publicKey("recipient"),
+]);
+
+const globalConfigInitializedLayout = borsh.struct([
+    borsh.publicKey("admin"),
+    borsh.publicKey("treasury"),
+]);
+
+const treasuryUpdatedLayout = borsh.struct([
+    borsh.publicKey("new_treasury"),
+    borsh.publicKey("admin"),
 ]);
 
 function discriminatorMatch(log: string, discriminator_name: string): boolean {
@@ -101,17 +122,24 @@ function decodeQuestCreated(base64data: string) {
 
     // 解码剩余部分
     const decoded = questCreatedLayout.decode(buf.subarray(8));
+
+    const statusMap = {
+        0: 'Pending',
+        1: 'Active',
+        2: 'Paused',
+        3: 'Closed',
+        4: 'Cancelled'
+    };
+
     return {
         type: 'QuestCreated',
+        status: statusMap[decoded.status as keyof typeof statusMap] || 'Unknown',
+        statusCode: decoded.status,
         quest: new PublicKey(decoded.quest).toBase58(),
         questId: Number(decoded.quest_id),
         merchant: new PublicKey(decoded.merchant).toBase58(),
         mint: new PublicKey(decoded.mint).toBase58(),
         totalAmount: Number(decoded.total_amount),
-        startAt: Number(decoded.start_at),
-        endAt: Number(decoded.end_at),
-        startAtDate: new Date(Number(decoded.start_at) * 1000).toISOString(),
-        endAtDate: new Date(Number(decoded.end_at) * 1000).toISOString()
     };
 }
 
@@ -152,7 +180,8 @@ function decodeQuestStatusChanged(base64data: string) {
         0: 'Pending',
         1: 'Active',
         2: 'Paused',
-        3: 'Ended'
+        3: 'Closed',
+        4: 'Cancelled'
     };
 
     return {
@@ -185,7 +214,44 @@ function decodeClaimed(base64data: string) {
     };
 }
 
-// 解码 MerkleRootSet 事件 - 暂时使用手动解析
+// 解码 QuestActivated 事件
+function decodeQuestActivated(base64data: string) {
+    const buf = Buffer.from(base64data, "base64");
+
+    // 校验 discriminator
+    const disc = eventDiscriminator("QuestActivated");
+    if (!buf.subarray(0, 8).equals(disc)) {
+        throw new Error("Not a QuestActivated event");
+    }
+
+    // 解码剩余部分
+    const decoded = questActivatedLayout.decode(buf.subarray(8));
+
+    const statusMap = {
+        0: 'Pending',
+        1: 'Active',
+        2: 'Paused',
+        3: 'Closed',
+        4: 'Cancelled'
+    };
+
+    const merkleRoot = Buffer.from(decoded.merkle_root).toString('hex');
+
+    return {
+        type: 'QuestActivated',
+        status: statusMap[decoded.status as keyof typeof statusMap] || 'Unknown',
+        statusCode: decoded.status,
+        quest: new PublicKey(decoded.quest).toBase58(),
+        version: decoded.version,
+        merkleRoot: merkleRoot,
+        startAt: Number(decoded.start_at),
+        endAt: Number(decoded.end_at),
+        startAtDate: new Date(Number(decoded.start_at) * 1000).toISOString(),
+        endAtDate: new Date(Number(decoded.end_at) * 1000).toISOString()
+    };
+}
+
+// 解码 MerkleRootSet 事件（保留兼容性，但可能不再使用）
 function decodeMerkleRootSet(base64data: string) {
     const buf = Buffer.from(base64data, "base64");
 
@@ -246,8 +312,19 @@ function decodeQuestClosed(base64data: string) {
 
     // 解码剩余部分
     const decoded = questClosedLayout.decode(buf.subarray(8));
+
+    const statusMap = {
+        0: 'Pending',
+        1: 'Active',
+        2: 'Paused',
+        3: 'Closed',
+        4: 'Cancelled'
+    };
+
     return {
         type: 'QuestClosed',
+        status: statusMap[decoded.status as keyof typeof statusMap] || 'Unknown',
+        statusCode: decoded.status,
         quest: new PublicKey(decoded.quest).toBase58(),
         remainingTransferred: Number(decoded.remaining_transferred),
         recipient: new PublicKey(decoded.recipient).toBase58(),
@@ -263,11 +340,60 @@ function decodeQuestCancelled(base64data: string) {
     }
 
     const decoded = questCancelledLayout.decode(buf.subarray(8));
+
+    const statusMap = {
+        0: 'Pending',
+        1: 'Active',
+        2: 'Paused',
+        3: 'Closed',
+        4: 'Cancelled'
+    };
+
     return {
         type: 'QuestCancelled',
+        status: statusMap[decoded.status as keyof typeof statusMap] || 'Unknown',
+        statusCode: decoded.status,
         quest: new PublicKey(decoded.quest).toBase58(),
         remainingTransferred: Number(decoded.remaining_transferred),
         recipient: new PublicKey(decoded.recipient).toBase58(),
+    };
+}
+
+// 解码 GlobalConfigInitialized 事件
+function decodeGlobalConfigInitialized(base64data: string) {
+    const buf = Buffer.from(base64data, "base64");
+
+    // 校验 discriminator
+    const disc = eventDiscriminator("GlobalConfigInitialized");
+    if (!buf.subarray(0, 8).equals(disc)) {
+        throw new Error("Not a GlobalConfigInitialized event");
+    }
+
+    // 解码剩余部分
+    const decoded = globalConfigInitializedLayout.decode(buf.subarray(8));
+    return {
+        type: 'GlobalConfigInitialized',
+        admin: new PublicKey(decoded.admin).toBase58(),
+        treasury: new PublicKey(decoded.treasury).toBase58(),
+    };
+}
+
+// 解码 TreasuryUpdated 事件
+function decodeTreasuryUpdated(base64data: string) {
+    const buf = Buffer.from(base64data, "base64");
+
+    // 校验 discriminator
+    const disc = eventDiscriminator("TreasuryUpdated");
+    if (!buf.subarray(0, 8).equals(disc)) {
+        throw new Error("Not a TreasuryUpdated event");
+    }
+
+    // 解码剩余部分
+    const decoded = treasuryUpdatedLayout.decode(buf.subarray(8));
+    return {
+        type: 'TreasuryUpdated',
+        newTreasury: new PublicKey(decoded.new_treasury).toBase58(),
+        admin: new PublicKey(decoded.admin).toBase58(),
     };
 }
 
@@ -295,10 +421,11 @@ class ReadOnlyQuestScanner {
 
         try {
             // 使用 getProgramAccounts 获取所有相关账户
+            // QuestAccount 大小: 8 (discriminator) + 8 + 32*4 + 32 + 8 + 1 + 4 + 32*2 + 8*3 + 8 = 209
             const accounts = await this.connection.getProgramAccounts(this.programId, {
                 filters: [
                     {
-                        dataSize: 200, // QuestAccount 的固定大小
+                        dataSize: 209, // QuestAccount 的固定大小
                     }
                 ]
             });
@@ -310,7 +437,7 @@ class ReadOnlyQuestScanner {
             for (const { pubkey, account } of accounts) {
                 try {
                     // 检查是否是 Quest 账户（通过数据大小和内容判断）
-                    if (account.data.length !== 200) {
+                    if (account.data.length !== 209) {
                         continue;
                     }
 
@@ -414,9 +541,12 @@ class ReadOnlyQuestScanner {
                             log.includes('QuestStatusChanged') ||
                             log.includes('Claim') ||
                             log.includes('SetMerkleRoot') ||
+                            log.includes('QuestActivated') ||
                             log.includes('QuestClosed') ||
                             log.includes('QuestCreated') ||
                             log.includes('QuestCancelled') ||
+                            log.includes('GlobalConfigInitialized') ||
+                            log.includes('TreasuryUpdated') ||
                             log.includes('Program data:')
                         );
 
@@ -504,10 +634,13 @@ class ReadOnlyQuestScanner {
                     else if (log.includes('VaultFunded')) acc.VaultFunded++;
                     else if (log.includes('QuestStatusChanged')) acc.QuestStatusChanged++;
                     else if (log.includes('Claimed')) acc.Claimed++;
+                    else if (log.includes('QuestActivated')) acc.QuestActivated++;
                     else if (log.includes('MerkleRootSet')) acc.MerkleRootSet++;
                     else if (log.includes('BitmapInitialized')) acc.BitmapInitialized++;
                     else if (log.includes('QuestClosed')) acc.QuestClosed++;
                     else if (log.includes('QuestCancelled')) acc.QuestCancelled++;
+                    else if (log.includes('GlobalConfigInitialized')) acc.GlobalConfigInitialized++;
+                    else if (log.includes('TreasuryUpdated')) acc.TreasuryUpdated++;
                 });
             }
             return acc;
@@ -516,10 +649,13 @@ class ReadOnlyQuestScanner {
             VaultFunded: 0,
             QuestStatusChanged: 0,
             Claimed: 0,
+            QuestActivated: 0,
             MerkleRootSet: 0,
             BitmapInitialized: 0,
             QuestClosed: 0,
             QuestCancelled: 0,
+            GlobalConfigInitialized: 0,
+            TreasuryUpdated: 0,
         });
 
         console.log('事件类型分布:');
@@ -600,7 +736,12 @@ class ReadOnlyQuestScanner {
                     const event = this.parseClaimedEvent(log);
                     if (event) parsedEvents.push(event);
                 }
-                // 解析 MerkleRootSet 事件
+                // 解析 QuestActivated 事件
+                else if (discriminatorMatch(log, 'QuestActivated')) {
+                    const event = this.parseQuestActivatedEvent(log);
+                    if (event) parsedEvents.push(event);
+                }
+                // 解析 MerkleRootSet 事件（保留兼容性）
                 else if (discriminatorMatch(log, 'MerkleRootSet')) {
                     const event = this.parseMerkleRootSetEvent(log);
                     if (event) parsedEvents.push(event);
@@ -618,6 +759,16 @@ class ReadOnlyQuestScanner {
                 // 解析 QuestCancelled 事件
                 else if (discriminatorMatch(log, 'QuestCancelled')) {
                     const event = this.parseQuestCancelledEvent(log);
+                    if (event) parsedEvents.push(event);
+                }
+                // 解析 GlobalConfigInitialized 事件
+                else if (discriminatorMatch(log, 'GlobalConfigInitialized')) {
+                    const event = this.parseGlobalConfigInitializedEvent(log);
+                    if (event) parsedEvents.push(event);
+                }
+                // 解析 TreasuryUpdated 事件
+                else if (discriminatorMatch(log, 'TreasuryUpdated')) {
+                    const event = this.parseTreasuryUpdatedEvent(log);
                     if (event) parsedEvents.push(event);
                 }
             } catch (error) {
@@ -693,7 +844,23 @@ class ReadOnlyQuestScanner {
 
 
     /**
-     * 解析 MerkleRootSet 事件
+     * 解析 QuestActivated 事件
+     */
+    private parseQuestActivatedEvent(log: string): any | null {
+        try {
+            const dataMatch = log.match(/Program data: (.+)/);
+            if (!dataMatch) return null;
+
+            const decoded = decodeQuestActivated(dataMatch[1]);
+            return decoded;
+        } catch (error) {
+            console.warn('解析 QuestActivated 事件失败:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 解析 MerkleRootSet 事件（保留兼容性）
      */
     private parseMerkleRootSetEvent(log: string): any | null {
         try {
@@ -757,6 +924,38 @@ class ReadOnlyQuestScanner {
     }
 
     /**
+     * 解析 GlobalConfigInitialized 事件
+     */
+    private parseGlobalConfigInitializedEvent(log: string): any | null {
+        try {
+            const dataMatch = log.match(/Program data: (.+)/);
+            if (!dataMatch) return null;
+
+            const decoded = decodeGlobalConfigInitialized(dataMatch[1]);
+            return decoded;
+        } catch (error) {
+            console.warn('解析 GlobalConfigInitialized 事件失败:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 解析 TreasuryUpdated 事件
+     */
+    private parseTreasuryUpdatedEvent(log: string): any | null {
+        try {
+            const dataMatch = log.match(/Program data: (.+)/);
+            if (!dataMatch) return null;
+
+            const decoded = decodeTreasuryUpdated(dataMatch[1]);
+            return decoded;
+        } catch (error) {
+            console.warn('解析 TreasuryUpdated 事件失败:', error);
+            return null;
+        }
+    }
+
+    /**
      * 扫描特定 quest 的事件历史
      */
     async scanQuestEvents(questPubkey: PublicKey, limit: number = 20): Promise<any[]> {
@@ -781,10 +980,13 @@ class ReadOnlyQuestScanner {
                             log.includes('VaultFunded') ||
                             log.includes('QuestStatusChanged') ||
                             log.includes('Claimed') ||
+                            log.includes('QuestActivated') ||
                             log.includes('MerkleRootSet') ||
                             log.includes('BitmapInitialized') ||
                             log.includes('QuestClosed') ||
-                            log.includes('QuestCancelled')
+                            log.includes('QuestCancelled') ||
+                            log.includes('GlobalConfigInitialized') ||
+                            log.includes('TreasuryUpdated')
                         );
 
                         if (questLogs.length > 0) {
@@ -891,11 +1093,19 @@ class ReadOnlyQuestScanner {
     private displayParsedEvent(event: any, indent: string = ''): void {
         switch (event.type) {
             case 'QuestCreated':
+                console.log(`${indent}  Status: ${event.status || 'Unknown'}`);
                 console.log(`${indent}  Quest: ${event.quest}`);
                 console.log(`${indent}  Quest ID: ${event.questId}`);
                 console.log(`${indent}  Merchant: ${event.merchant}`);
                 console.log(`${indent}  Mint: ${event.mint}`);
                 console.log(`${indent}  Total Amount: ${event.totalAmount}`);
+                break;
+
+            case 'QuestActivated':
+                console.log(`${indent}  Status: ${event.status || 'Unknown'}`);
+                console.log(`${indent}  Quest: ${event.quest}`);
+                console.log(`${indent}  Version: ${event.version}`);
+                console.log(`${indent}  Merkle Root: ${event.merkleRoot}`);
                 console.log(`${indent}  Start: ${event.startAtDate}`);
                 console.log(`${indent}  End: ${event.endAtDate}`);
                 break;
@@ -932,6 +1142,7 @@ class ReadOnlyQuestScanner {
                 break;
 
             case 'QuestClosed':
+                console.log(`${indent}  Status: ${event.status || 'Unknown'}`);
                 console.log(`${indent}  Quest: ${event.quest}`);
                 console.log(`${indent}  Remaining Transferred: ${event.remainingTransferred}`);
                 if (event.recipient) {
@@ -939,11 +1150,22 @@ class ReadOnlyQuestScanner {
                 }
                 break;
             case 'QuestCancelled':
+                console.log(`${indent}  Status: ${event.status || 'Unknown'}`);
                 console.log(`${indent}  Quest: ${event.quest}`);
                 console.log(`${indent}  Remaining Transferred: ${event.remainingTransferred}`);
                 if (event.recipient) {
                     console.log(`${indent}  Recipient: ${event.recipient}`);
                 }
+                break;
+
+            case 'GlobalConfigInitialized':
+                console.log(`${indent}  Admin: ${event.admin}`);
+                console.log(`${indent}  Treasury: ${event.treasury}`);
+                break;
+
+            case 'TreasuryUpdated':
+                console.log(`${indent}  New Treasury: ${event.newTreasury}`);
+                console.log(`${indent}  Admin: ${event.admin}`);
                 break;
 
             default:
@@ -980,7 +1202,7 @@ class ReadOnlyQuestScanner {
             0: 'Pending',
             1: 'Active',
             2: 'Paused',
-            3: 'Ended',
+            3: 'Closed',
             4: 'Cancelled'
         };
         return statusMap[status as keyof typeof statusMap] || 'Unknown';
@@ -992,7 +1214,7 @@ class ReadOnlyQuestScanner {
     private parseQuestAccount(data: Buffer): any | null {
         try {
             // QuestAccount 结构：
-            // 8 (discriminator) + 8 (quest_id) + 32 (mint) + 32 (vault) + 32 (vault_authority) + 32 (merkle_root) + 8 (claimed_total) + 1 (status) + 4 (version) + 32 (merchant) + 32 (admin) + 8 (start_at) + 8 (end_at) + 8 (total_amount) + 8 (funded_amount) + 1 (is_started)
+            // 8 (discriminator) + 8 (quest_id) + 32 (mint) + 32 (vault) + 32 (vault_authority) + 32 (merkle_root) + 8 (claimed_total) + 1 (status) + 4 (version) + 32 (merchant) + 32 (admin) + 8 (start_at) + 8 (end_at) + 8 (total_amount) + 8 (funded_amount) + 8 (fee_amount)
 
             let offset = 8; // 跳过 discriminator
 
@@ -1038,6 +1260,8 @@ class ReadOnlyQuestScanner {
             const fundedAmount = data.readBigUInt64LE(offset);
             offset += 8;
 
+            const feeAmount = data.readBigUInt64LE(offset);
+            offset += 8;
 
             return {
                 questId: Number(questId),
@@ -1054,6 +1278,7 @@ class ReadOnlyQuestScanner {
                 endAt: Number(endAt),
                 totalAmount: Number(totalAmount),
                 fundedAmount: Number(fundedAmount),
+                feeAmount: Number(feeAmount),
             };
         } catch (error) {
             console.error('解析 QuestAccount 失败:', error);

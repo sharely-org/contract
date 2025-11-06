@@ -21,8 +21,6 @@ function parseSecret(json: string | undefined): Uint8Array {
 
     const questId = Number(process.env.QUEST_ID || '0');
     const totalAmount = new anchor.BN(process.env.TOTAL_AMOUNT || '0');
-    const startAt = Number(process.env.START_AT || '0');
-    const endAt = Number(process.env.END_AT || '0');
 
     const message = bs58.decode(process.env.MESSAGE_BASE58 || '');
     const signature = bs58.decode(process.env.SIGNATURE_BASE58 || '');
@@ -61,9 +59,8 @@ function parseSecret(json: string | undefined): Uint8Array {
 
     // 2) program instruction
     const ix2 = await program.methods
-        .initializeQuestByMerchant(new anchor.BN(questId), totalAmount, new anchor.BN(startAt), new anchor.BN(endAt), Buffer.from(message))
+        .initializeQuestByMerchant(new anchor.BN(questId), totalAmount, Buffer.from(message))
         .accounts({
-            // 移除 admin 账户，因为使用固定公钥验证
             merchant: merchantKp.publicKey,
             merchantSourceAta: merchantAta,
             quest,

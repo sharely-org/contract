@@ -2,9 +2,10 @@
 
 # 环境
 - node: v20.18.1
-- solana-cli 2.1.10
+- solana-cli 3.0.8 (src:b4d1c774; feat:3604001754, client:Agave)
 - rustc 1.81.0 
 - anchor-cli 0.31.1
+
 
 注意事项：
 rpc 选择：

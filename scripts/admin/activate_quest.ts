@@ -69,15 +69,26 @@ function parseSecret(json: string | undefined): Uint8Array {
         process.exit(1);
     }
 
-    const ix1 = await program.methods
-        .setMerkleRoot(hexTo32(MERKLE_ROOT_HEX), USER_COUNT)
-        .accounts({ admin, quest, bitmapShard })
+    const start_at = Math.floor(Date.now() / 1000);
+    const end_at = start_at + 3600 * 24 * 7;
+    const fee_amount = 10000000;
+    console.log('start_at =', start_at);
+    console.log('end_at =', end_at);
+    console.log('fee_amount =', fee_amount);
+    return;
+    const tx = await program.methods
+        .activateQuest(
+            hexTo32(MERKLE_ROOT_HEX),
+            USER_COUNT,
+            new anchor.BN(start_at),
+            new anchor.BN(end_at),
+            new anchor.BN(fee_amount)
+        )
+        .accounts({ admin, quest, bitmapShard, systemProgram: anchor.web3.SystemProgram.programId })
         .rpc();
 
-    console.log('Merkle root set and bitmap initialized');
+    console.log('Quest activated');
     console.log('Admin =', admin.toBase58());
-    console.log('User count =', USER_COUNT);
-    console.log('Bitmap size =', bitmap_size, 'bytes');
 })();
 
 

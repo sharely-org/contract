@@ -25,7 +25,7 @@ const DESTINATION_ATA = process.env.DESTINATION_ATA || '';
 
 
     // 取消 Quest 并把剩余资金转走（需要是 quest 的管理员）
-    // 避免 TS 深度推断问题
+    // merchant_ata 从 quest 账户中获取 merchant 地址计算
     await (program.methods as any)
         .cancelQuest()
         .accounts({
@@ -33,10 +33,11 @@ const DESTINATION_ATA = process.env.DESTINATION_ATA || '';
             quest,
             vaultAuthority: questAccount.vaultAuthority,
             vault,
+            merchantAta: destinationAta,
             tokenProgram: TOKEN_PROGRAM_ID,
         } as any)
         .rpc();
-    console.log('Quest closed');
+    console.log('Quest cancelled');
     console.log('Remaining funds transferred to:', destinationAta.toBase58());
 })();
 
