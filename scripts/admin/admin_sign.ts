@@ -53,4 +53,8 @@ function i64ToLeBytes(n: bigint): Uint8Array {
     console.log('MESSAGE_BASE58=', bs58.encode(message));
     console.log('SIGNATURE_BASE58=', bs58.encode(sig));
     console.log('SIGNATURE=', sig);
+    console.log('questId=', questId);
+    console.log('totalAmount=', totalAmount);
+    console.log('merchant=', merchant.toBase58());
+
 })();

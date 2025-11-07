@@ -70,12 +70,11 @@ function parseSecret(json: string | undefined): Uint8Array {
     }
 
     const start_at = Math.floor(Date.now() / 1000);
-    const end_at = start_at + 3600 * 24 * 7;
+    const end_at = start_at + 3600 * 24 * 1;
     const fee_amount = 10000000;
     console.log('start_at =', start_at);
     console.log('end_at =', end_at);
     console.log('fee_amount =', fee_amount);
-    return;
     const tx = await program.methods
         .activateQuest(
             hexTo32(MERKLE_ROOT_HEX),

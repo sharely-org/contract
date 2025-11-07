@@ -56,6 +56,11 @@ function parseSecret(json: string | undefined): Uint8Array {
         message,
         signature,
     });
+    const PROGRAM_ID = process.env.PROGRAM_ID || '';
+    const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from('config')],
+        new anchor.web3.PublicKey(PROGRAM_ID)
+    );
 
     // 2) program instruction
     const ix2 = await program.methods
@@ -72,6 +77,7 @@ function parseSecret(json: string | undefined): Uint8Array {
             tokenProgram: TOKEN_PROGRAM_ID,
             associatedTokenProgram: anchor.utils.token.ASSOCIATED_PROGRAM_ID,
             rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+            config: config,
         })
         .instruction();
 
@@ -79,6 +85,11 @@ function parseSecret(json: string | undefined): Uint8Array {
     tx.feePayer = merchantKp.publicKey;
     tx.recentBlockhash = (await connection.getLatestBlockhash('confirmed')).blockhash;
     tx.sign(merchantKp);
-    const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
-    console.log('tx =', sig);
+    console.log('tx =', tx);
+    try {
+        const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: false });
+        console.log('tx =', sig);
+    } catch (error) {
+        console.error('error =', error);
+    }
 })();

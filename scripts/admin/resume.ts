@@ -1,4 +1,5 @@
 import { getAdminProvider, getProgram, asPubkey } from './common';
+import * as anchor from '@coral-xyz/anchor';
 
 const QUEST = process.env.QUEST_PUBKEY || '';
 
@@ -11,14 +12,19 @@ const QUEST = process.env.QUEST_PUBKEY || '';
         return;
     }
 
+    const PROGRAM_ID = process.env.PROGRAM_ID || '';
     const quest = asPubkey(QUEST);
-
+    const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from('config')],
+        asPubkey(PROGRAM_ID)
+    );
     try {
         await (program.methods as any)
             .resumeQuest()
             .accounts({
                 admin: provider.wallet.publicKey,
                 quest,
+                config: config,
             } as any)
             .rpc();
         console.log('Quest resumed');

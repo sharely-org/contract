@@ -16,29 +16,29 @@ const TREASURY = process.env.TREASURY_PUBKEY || '';
     const treasury = asPubkey(TREASURY);
 
     // 派生 global_config PDA
-    const [globalConfig] = anchor.web3.PublicKey.findProgramAddressSync(
-        [Buffer.from('global_config')],
+    const [config] = anchor.web3.PublicKey.findProgramAddressSync(
+        [Buffer.from('config')],
         program.programId
     );
 
     console.log('初始化全局配置...');
     console.log('Admin:', provider.wallet.publicKey.toBase58());
     console.log('Treasury:', treasury.toBase58());
-    console.log('Global Config PDA:', globalConfig.toBase58());
+    console.log('Global Config PDA:', config.toBase58());
 
     try {
         const tx = await (program.methods as any)
-            .initializeGlobalConfig(treasury)
+            .initialize(provider.wallet.publicKey, treasury)
             .accounts({
                 admin: provider.wallet.publicKey,
-                globalConfig,
+                config: config,
                 systemProgram: anchor.web3.SystemProgram.programId,
             } as any)
             .rpc();
 
         console.log('✅ 全局配置初始化成功!');
         console.log('交易签名:', tx);
-        console.log('Global Config 地址:', globalConfig.toBase58());
+        console.log('Global Config 地址:', config.toBase58());
     } catch (error) {
         console.error('❌ 初始化失败:', error);
         if ((error as any).logs) {

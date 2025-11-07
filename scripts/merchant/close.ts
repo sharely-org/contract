@@ -24,13 +24,13 @@ const DESTINATION_ATA = process.env.DESTINATION_ATA || '';
 
     // 派生 global_config PDA
     const [globalConfig] = anchor.web3.PublicKey.findProgramAddressSync(
-        [Buffer.from('global_config')],
+        [Buffer.from('config')],
         program.programId
     );
 
     // 读取全局配置获取 treasury 地址
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const globalConfigAccount = await (program.account as any).globalConfig.fetch(globalConfig);
+    const globalConfigAccount = await (program.account as any).config.fetch(globalConfig);
     const treasury = globalConfigAccount.treasury;
 
     // 计算 treasury_ata (treasury 的 ATA)

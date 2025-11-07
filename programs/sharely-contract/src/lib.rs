@@ -5,29 +5,37 @@ use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_check
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("3fMMnSK1H5dZk9VFQyWcPvjz5Ms3AsxA39K84pCaxGK9");
-
-const AUTHORIZED_ADMIN: Pubkey = pubkey!("CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv");
+declare_id!("51QFasYaoDzvJuTv7Bbfn1GkV8H1aKUD7iwx1W6SETpj");
 
 #[program]
 pub mod sharely_contract {
     use super::*;
 
     // 初始化全局配置（仅管理员可调用，只需调用一次）
-    pub fn initialize_global_config(
-        ctx: Context<InitializeGlobalConfig>,
-        treasury: Pubkey,
-    ) -> Result<()> {
-        require!(
-            ctx.accounts.admin.key() == AUTHORIZED_ADMIN,
-            SharelyError::Unauthorized
-        );
-        let config = &mut ctx.accounts.global_config;
+    pub fn initialize(ctx: Context<Initialize>, admin: Pubkey, treasury: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
         config.treasury = treasury;
-        config.admin = ctx.accounts.admin.key();
-        emit!(GlobalConfigInitialized {
+        config.admin = admin;
+        emit!(Initialized {
             admin: ctx.accounts.admin.key(),
             treasury: treasury,
+        });
+        Ok(())
+    }
+
+    pub fn change_admin(ctx: Context<ChangeAdmin>, new_admin: Pubkey) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+
+        require_keys_eq!(
+            ctx.accounts.signer.key(),
+            config.admin,
+            SharelyError::Unauthorized
+        );
+
+        config.admin = new_admin;
+        emit!(AdminChanged {
+            old_admin: config.admin,
+            new_admin: new_admin
         });
         Ok(())
     }
@@ -42,15 +50,12 @@ pub mod sharely_contract {
         require!(total_amount > 0, SharelyError::InvalidAmount);
         // 校验 end_at 是否大于当前时间
 
+        let config = &mut ctx.accounts.config;
         // 校验 ed25519 签名，并核对消息体
-        verify_ed25519_signature(
-            &ctx.accounts.instructions,
-            &AUTHORIZED_ADMIN,
-            &approval_bytes,
-        )?;
+        verify_ed25519_signature(&ctx.accounts.instructions, &config.admin, &approval_bytes)?;
         verify_approval_message(
             &approval_bytes,
-            &AUTHORIZED_ADMIN,
+            &config.admin,
             &ctx.accounts.merchant.key(),
             &ctx.accounts.mint.key(),
             &quest_id,
@@ -97,7 +102,7 @@ pub mod sharely_contract {
         quest.vault = ctx.accounts.vault.key();
         quest.vault_authority = ctx.accounts.vault_authority.key();
         quest.merchant = ctx.accounts.merchant.key();
-        quest.admin = AUTHORIZED_ADMIN;
+        quest.admin = config.admin;
         quest.merkle_root = [0u8; 32];
         quest.claimed_total = 0;
         quest.status = Status::Pending; // 未启动
@@ -120,6 +125,7 @@ pub mod sharely_contract {
         emit!(VaultFunded {
             funder: ctx.accounts.merchant.key(),
             quest: quest.key(),
+            quest_id: quest.quest_id,
             amount: total_amount
         });
         Ok(())
@@ -167,7 +173,7 @@ pub mod sharely_contract {
         let account_info = ctx.accounts.bitmap_shard.to_account_info();
         let current_space = account_info.data_len();
         if required_space > current_space {
-            account_info.realloc(required_space, false)?;
+            account_info.resize(required_space)?;
             let additional_lamports = Rent::get()?.minimum_balance(required_space)
                 - Rent::get()?.minimum_balance(current_space);
             anchor_lang::system_program::transfer(
@@ -196,6 +202,7 @@ pub mod sharely_contract {
         emit!(QuestActivated {
             status: quest.status,
             quest: quest.key(),
+            quest_id: quest.quest_id,
             version: quest.version,
             merkle_root: quest.merkle_root,
             start_at,
@@ -205,6 +212,7 @@ pub mod sharely_contract {
 
         emit!(BitmapInitialized {
             quest: quest.key(),
+            quest_id: quest.quest_id,
             user_count,
             bitmap_size,
         });
@@ -214,7 +222,7 @@ pub mod sharely_contract {
 
     pub fn pause_quest(ctx: Context<AdminOnQuest>) -> Result<()> {
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
+            ctx.accounts.admin.key() == ctx.accounts.config.admin,
             SharelyError::Unauthorized
         );
         require!(
@@ -224,6 +232,7 @@ pub mod sharely_contract {
         ctx.accounts.quest.status = Status::Paused;
         emit!(QuestStatusChanged {
             quest: ctx.accounts.quest.key(),
+            quest_id: ctx.accounts.quest.quest_id,
             status: ctx.accounts.quest.status
         });
         Ok(())
@@ -231,7 +240,7 @@ pub mod sharely_contract {
 
     pub fn resume_quest(ctx: Context<AdminOnQuest>) -> Result<()> {
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
+            ctx.accounts.admin.key() == ctx.accounts.config.admin,
             SharelyError::Unauthorized
         );
         require!(
@@ -241,6 +250,7 @@ pub mod sharely_contract {
         ctx.accounts.quest.status = Status::Active;
         emit!(QuestStatusChanged {
             quest: ctx.accounts.quest.key(),
+            quest_id: ctx.accounts.quest.quest_id,
             status: ctx.accounts.quest.status,
         });
         Ok(())
@@ -304,6 +314,7 @@ pub mod sharely_contract {
             .ok_or(SharelyError::Overflow)?;
         emit!(Claimed {
             quest: quest.key(),
+            quest_id: quest.quest_id,
             user: ctx.accounts.user.key(),
             index,
             amount,
@@ -342,10 +353,16 @@ pub mod sharely_contract {
                 &signer,
             );
             token::transfer(cpi_ctx, fee_amount)?;
+            emit!(FeeTransferred {
+                quest: ctx.accounts.quest.key(),
+                quest_id: ctx.accounts.quest.quest_id,
+                fee_amount,
+                recipient: ctx.accounts.treasury_ata.key(),
+            });
         }
 
-        let amount = ctx.accounts.vault.amount - fee_amount;
-        if amount > 0 {
+        if ctx.accounts.vault.amount > fee_amount {
+            let amount = ctx.accounts.vault.amount - fee_amount;
             let bump = ctx.bumps.vault_authority;
             let quest_key = ctx.accounts.quest.key();
             let signer_seeds: &[&[u8]] = &[b"vault_auth", quest_key.as_ref(), &[bump]];
@@ -360,23 +377,29 @@ pub mod sharely_contract {
                 &signer,
             );
             token::transfer(cpi_ctx, amount)?;
+
+            emit!(QuestClosed {
+                status: ctx.accounts.quest.status,
+                quest: ctx.accounts.quest.key(),
+                quest_id: ctx.accounts.quest.quest_id,
+                remaining_transferred: amount,
+                recipient: ctx.accounts.destination_ata.key(),
+            });
         }
         ctx.accounts.quest.status = Status::Closed;
 
-        emit!(QuestClosed {
-            status: ctx.accounts.quest.status,
-            quest: ctx.accounts.quest.key(),
-            remaining_transferred: amount,
-            recipient: ctx.accounts.destination_ata.key(),
-        });
         Ok(())
     }
 
     // only admin can cancel quest
     pub fn cancel_quest(ctx: Context<CancelQuest>) -> Result<()> {
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.quest.admin,
+            ctx.accounts.admin.key() == ctx.accounts.config.admin,
             SharelyError::Unauthorized
+        );
+        require!(
+            ctx.accounts.quest.status == Status::Pending,
+            SharelyError::InvalidStatus
         );
         ctx.accounts.quest.status = Status::Cancelled;
         // transfer vault amount to merchant
@@ -401,6 +424,7 @@ pub mod sharely_contract {
             emit!(QuestCancelled {
                 status: ctx.accounts.quest.status,
                 quest: ctx.accounts.quest.key(),
+                quest_id: ctx.accounts.quest.quest_id,
                 remaining_transferred: amount,
                 recipient: ctx.accounts.quest.merchant,
             });
@@ -457,10 +481,10 @@ pub mod sharely_contract {
     // 更新 treasury 地址（仅管理员可调用）
     pub fn update_treasury(ctx: Context<UpdateTreasury>, new_treasury: Pubkey) -> Result<()> {
         require!(
-            ctx.accounts.admin.key() == ctx.accounts.global_config.admin,
+            ctx.accounts.admin.key() == ctx.accounts.config.admin,
             SharelyError::Unauthorized
         );
-        ctx.accounts.global_config.treasury = new_treasury;
+        ctx.accounts.config.treasury = new_treasury;
         emit!(TreasuryUpdated {
             new_treasury,
             admin: ctx.accounts.admin.key(),
@@ -501,7 +525,7 @@ pub struct ClaimBitmapShard {
 }
 
 #[account]
-pub struct GlobalConfig {
+pub struct Config {
     pub admin: Pubkey,
     pub treasury: Pubkey,
 }
@@ -518,6 +542,31 @@ pub enum Status {
 // =========================
 // Contexts
 // =========================
+
+#[derive(Accounts)]
+pub struct Initialize<'info> {
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    /// CHECK: 全局配置账户，使用固定种子
+    #[account(
+        init,
+        payer = admin,
+        space = 8 + 32 + 32, // discriminator + admin + treasury
+        seeds = [b"config"],
+        bump
+    )]
+    pub config: Account<'info, Config>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct ChangeAdmin<'info> {
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: Account<'info, Config>,
+}
 
 #[derive(Accounts)]
 #[instruction(quest_id: u64)]
@@ -559,6 +608,8 @@ pub struct InitializeQuestByMerchant<'info> {
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,
     pub rent: Sysvar<'info, Rent>,
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: Account<'info, Config>,
 }
 
 #[derive(Accounts)]
@@ -567,6 +618,8 @@ pub struct AdminOnQuest<'info> {
     pub admin: Signer<'info>,
     #[account(mut)]
     pub quest: Account<'info, QuestAccount>,
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: Account<'info, Config>,
 }
 
 #[derive(Accounts)]
@@ -632,14 +685,13 @@ pub struct CloseQuestByMerchant<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut)]
     pub destination_ata: Account<'info, TokenAccount>,
-    /// 全局配置账户，包含 treasury 地址
-    #[account(seeds = [b"global_config"], bump)]
-    pub global_config: Account<'info, GlobalConfig>,
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: Account<'info, Config>,
     /// CHECK: 验证 treasury_ata 是否为授权 treasury 地址的 ATA
     #[account(
         mut,
         constraint = treasury_ata.mint == quest.mint @ SharelyError::AccountMismatch,
-        constraint = treasury_ata.owner == global_config.treasury @ SharelyError::Unauthorized
+        constraint = treasury_ata.owner == config.treasury @ SharelyError::Unauthorized
     )]
     pub treasury_ata: Account<'info, TokenAccount>,
     pub token_program: Program<'info, Token>,
@@ -663,23 +715,9 @@ pub struct CancelQuest<'info> {
         constraint = merchant_ata.owner == quest.merchant @ SharelyError::AccountMismatch
     )]
     pub merchant_ata: Account<'info, TokenAccount>,
+    #[account(mut, seeds = [b"config"], bump)]
+    pub config: Account<'info, Config>,
     pub token_program: Program<'info, Token>,
-}
-
-#[derive(Accounts)]
-pub struct InitializeGlobalConfig<'info> {
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    /// CHECK: 全局配置账户，使用固定种子
-    #[account(
-        init,
-        payer = admin,
-        space = 8 + 32 + 32, // discriminator + admin + treasury
-        seeds = [b"global_config"],
-        bump
-    )]
-    pub global_config: Account<'info, GlobalConfig>,
-    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
@@ -689,10 +727,11 @@ pub struct UpdateTreasury<'info> {
     /// CHECK: 全局配置账户
     #[account(
         mut,
-        seeds = [b"global_config"],
+        has_one = admin,
+        seeds = [b"config"],
         bump
     )]
-    pub global_config: Account<'info, GlobalConfig>,
+    pub config: Account<'info, Config>,
 }
 
 // =========================
@@ -700,9 +739,15 @@ pub struct UpdateTreasury<'info> {
 // =========================
 
 #[event]
-pub struct GlobalConfigInitialized {
+pub struct Initialized {
     pub admin: Pubkey,
     pub treasury: Pubkey,
+}
+
+#[event]
+pub struct AdminChanged {
+    pub old_admin: Pubkey,
+    pub new_admin: Pubkey,
 }
 
 #[event]
@@ -718,6 +763,7 @@ pub struct QuestCreated {
 #[event]
 pub struct QuestStatusChanged {
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub status: Status,
 }
 
@@ -725,6 +771,7 @@ pub struct QuestStatusChanged {
 pub struct VaultFunded {
     pub funder: Pubkey,
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub amount: u64,
 }
 
@@ -732,6 +779,7 @@ pub struct VaultFunded {
 pub struct QuestActivated {
     pub status: Status,
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub version: u32,
     pub merkle_root: [u8; 32],
     pub start_at: i64,
@@ -742,6 +790,7 @@ pub struct QuestActivated {
 #[event]
 pub struct Claimed {
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub user: Pubkey,
     pub index: u64,
     pub amount: u64,
@@ -752,6 +801,7 @@ pub struct Claimed {
 pub struct QuestClosed {
     pub status: Status,
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub remaining_transferred: u64,
     pub recipient: Pubkey,
 }
@@ -760,6 +810,7 @@ pub struct QuestClosed {
 pub struct QuestCancelled {
     pub status: Status,
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub remaining_transferred: u64,
     pub recipient: Pubkey,
 }
@@ -767,6 +818,7 @@ pub struct QuestCancelled {
 #[event]
 pub struct BitmapInitialized {
     pub quest: Pubkey,
+    pub quest_id: u64,
     pub user_count: u32,
     pub bitmap_size: u32,
 }
@@ -775,6 +827,14 @@ pub struct BitmapInitialized {
 pub struct TreasuryUpdated {
     pub new_treasury: Pubkey,
     pub admin: Pubkey,
+}
+
+#[event]
+pub struct FeeTransferred {
+    pub quest: Pubkey,
+    pub quest_id: u64,
+    pub fee_amount: u64,
+    pub recipient: Pubkey,
 }
 
 // =========================

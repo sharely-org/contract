@@ -6,13 +6,13 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-sharely_contract = "3fMMnSK1H5dZk9VFQyWcPvjz5Ms3AsxA39K84pCaxGK9"
+sharely_contract = "51QFasYaoDzvJuTv7Bbfn1GkV8H1aKUD7iwx1W6SETpj"
 
 [programs.localnet]
-sharely_contract = "3fMMnSK1H5dZk9VFQyWcPvjz5Ms3AsxA39K84pCaxGK9"
+sharely_contract = "51QFasYaoDzvJuTv7Bbfn1GkV8H1aKUD7iwx1W6SETpj"
 
 [programs.mainnet]
-sharely_contract = "3fMMnSK1H5dZk9VFQyWcPvjz5Ms3AsxA39K84pCaxGK9"
+sharely_contract = "51QFasYaoDzvJuTv7Bbfn1GkV8H1aKUD7iwx1W6SETpj"
 
 [registry]
 url = "https://api.apr.dev"
