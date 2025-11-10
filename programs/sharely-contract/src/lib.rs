@@ -335,6 +335,8 @@ pub mod sharely_contract {
             SharelyError::InvalidStatus
         );
 
+        ctx.accounts.quest.status = Status::Closed;
+
         // transfer fee amount to treasury, the left amount will be transferred to merchant
         let fee_amount = ctx.accounts.quest.fee_amount;
         if fee_amount > 0 {
@@ -386,7 +388,6 @@ pub mod sharely_contract {
                 recipient: ctx.accounts.destination_ata.key(),
             });
         }
-        ctx.accounts.quest.status = Status::Closed;
 
         Ok(())
     }
