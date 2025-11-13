@@ -40,11 +40,7 @@
    cargo clean
    ```
 
-3. **Configure Admin Address**
-   - Edit `programs/sharely-contract/src/lib.rs`
-   - Replace `AUTHORIZED_ADMIN` with the actual admin address
-
-4. **Get and Configure Program ID**
+3. **Get and Configure Program ID**
    ```bash
    anchor keys list
    ```
@@ -53,12 +49,12 @@
      - `PROGRAM_ID` in `.env` file
      - `declare_id!("")` in `programs/sharely-contract/src/lib.rs`
 
-5. **Build Program**
+4. **Build Program**
    ```bash
    anchor build
    ```
 
-6. **Deploy Program**
+5. **Deploy Program**
    ```bash
    anchor deploy
    ```

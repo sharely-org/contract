@@ -40,11 +40,7 @@
    cargo clean
    ```
 
-3. **配置管理员地址**
-   - 编辑 `programs/sharely-contract/src/lib.rs`
-   - 替换 `AUTHORIZED_ADMIN` 为实际的管理员地址
-
-4. **获取并配置 Program ID**
+3. **获取并配置 Program ID**
    ```bash
    anchor keys list
    ```
@@ -53,12 +49,12 @@
      - `.env` 文件中的 `PROGRAM_ID`
      - `programs/sharely-contract/src/lib.rs` 中的 `declare_id!("")`
 
-5. **构建程序**
+4. **构建程序**
    ```bash
    anchor build
    ```
 
-6. **部署程序**
+5. **部署程序**
    ```bash
    anchor deploy
    ```
