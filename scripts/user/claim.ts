@@ -1,15 +1,25 @@
 import 'dotenv/config';
 import * as anchor from '@coral-xyz/anchor';
+import bs58 from 'bs58';
+
 import { PublicKey, Connection, Keypair } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress } from '@solana/spl-token';
 import { hexTo32ByteArray } from '../../utils/merkle';
 
 (async () => {
     const connection = new Connection(process.env.RPC_URL || 'http://127.0.0.1:8899', 'confirmed');
 
     // 从环境变量读取用户私钥
-    const secret = new Uint8Array(JSON.parse(process.env.USER_SECRET_JSON || '[]'));
+    var secret = new Uint8Array(JSON.parse(process.env.USER_SECRET_JSON || '[]'));
+    if (secret.length === 0) {
+        const privateKey = process.env.USER_PRIVATE_KEY || '';
+        if (privateKey.length > 0) {
+            const privateKeyBytes = bs58.decode(privateKey);
+            secret = new Uint8Array(privateKeyBytes);
+        }
+    }
     const wallet = new anchor.Wallet(Keypair.fromSecretKey(secret));
+    console.log('wallet =', wallet.publicKey.toString());
     const provider = new anchor.AnchorProvider(connection, wallet, {
         commitment: 'confirmed',
     });
@@ -36,18 +46,53 @@ import { hexTo32ByteArray } from '../../utils/merkle';
         program.programId
     );
 
+    // 验证 quest 账户是否存在
+    const questInfo = await connection.getAccountInfo(quest);
+    if (!questInfo) {
+        console.error(`Error: quest account not found at ${quest.toString()}`);
+        process.exit(1);
+    }
+    console.log('quest account exists, owner:', questInfo.owner.toString());
+
     // 获取 quest 账户信息
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const questAccount = await (program.account as any)["questAccount"].fetch(quest);
     const vault = questAccount.vault;
+    console.log('quest account data fetched successfully, vault:', vault.toString());
+
+    // 检查 bitmapShard 账户是否存在（需要通过 activate_quest 初始化）
+    const bitmapShardInfo = await connection.getAccountInfo(bitmapShard);
+    if (!bitmapShardInfo) {
+        console.error(`Error: bitmapShard account not found at ${bitmapShard.toString()}`);
+        console.error('This quest may not have been activated yet. Please run activate_quest first.');
+        process.exit(1);
+    }
+    console.log('bitmapShardInfo =', bitmapShardInfo);
+    console.log('bitmapShard owner:', bitmapShardInfo.owner.toString());
+    console.log('programId:', program.programId.toString());
+
+    // 验证账户所有者
+    if (!bitmapShardInfo.owner.equals(program.programId)) {
+        console.error(`Error: bitmapShard owner mismatch. Expected ${program.programId.toString()}, got ${bitmapShardInfo.owner.toString()}`);
+        process.exit(1);
+    }
 
     // 1) 查询是否已领取
-    const claimed = await program.methods
-        .isClaimed(new anchor.BN(index))
-        .accounts({ quest, bitmapShard, user })
-        .view();
-    console.log('isClaimed =', claimed);
-    if (claimed) return;
+    try {
+        const claimed = await program.methods
+            .isClaimed(new anchor.BN(index))
+            .accounts({ quest, bitmapShard, user })
+            .view();
+        console.log('isClaimed =', claimed);
+        if (claimed) return;
+    } catch (err: any) {
+        console.error('Error calling isClaimed:', err);
+        if (err.simulationResponse) {
+            console.error('Simulation error:', err.simulationResponse.err);
+            console.error('Simulation logs:', err.simulationResponse.logs);
+        }
+        throw err;
+    }
 
     // 2) 资格验证（只读）
     const eligible = await program.methods
@@ -72,8 +117,10 @@ import { hexTo32ByteArray } from '../../utils/merkle';
             vaultAuthority,
             vault,
             userAta,
+            mint,
             bitmapShard,
             tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: anchor.web3.SystemProgram.programId,
             rent: anchor.web3.SYSVAR_RENT_PUBKEY,
         })

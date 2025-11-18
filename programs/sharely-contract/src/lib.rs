@@ -2,10 +2,11 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::ed25519_program;
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::sysvar::instructions::load_instruction_at_checked;
+use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("51QFasYaoDzvJuTv7Bbfn1GkV8H1aKUD7iwx1W6SETpj");
+declare_id!("9xd5Uqy8azvzkZozZjP3NoyQGte7u7swHEWV239GPD6D");
 
 #[program]
 pub mod sharely_contract {
@@ -267,10 +268,36 @@ pub mod sharely_contract {
             proof.len() as u8 <= MAX_PROOF_NODES,
             SharelyError::ProofTooLong
         );
+
+        // 验证 mint 地址是否正确
         require!(
-            ctx.accounts.user_ata.mint == quest.mint,
+            ctx.accounts.mint.key() == quest.mint,
             SharelyError::AccountMismatch
         );
+
+        // 验证 user_ata 地址是否正确
+        let expected_ata =
+            get_associated_token_address(&ctx.accounts.user.key(), &ctx.accounts.mint.key());
+        require!(
+            ctx.accounts.user_ata.key() == expected_ata,
+            SharelyError::AccountMismatch
+        );
+
+        // 如果 user_ata 账户不存在，创建它
+        if ctx.accounts.user_ata.data_is_empty() {
+            anchor_spl::associated_token::create(CpiContext::new(
+                ctx.accounts.associated_token_program.to_account_info(),
+                anchor_spl::associated_token::Create {
+                    payer: ctx.accounts.user.to_account_info(),
+                    associated_token: ctx.accounts.user_ata.to_account_info(),
+                    authority: ctx.accounts.user.to_account_info(),
+                    mint: ctx.accounts.mint.to_account_info(),
+                    system_program: ctx.accounts.system_program.to_account_info(),
+                    token_program: ctx.accounts.token_program.to_account_info(),
+                },
+            ))?;
+        }
+
         let leaf = leaf_hash(index, ctx.accounts.user.key(), amount);
         let computed_root = compute_merkle_root_sorted(leaf, &proof);
         require!(
@@ -647,12 +674,16 @@ pub struct Claim<'info> {
     pub vault_authority: UncheckedAccount<'info>,
     #[account(mut, address = quest.vault)]
     pub vault: Account<'info, TokenAccount>,
+    /// CHECK: User's associated token account (will be created if needed)
     #[account(mut)]
-    pub user_ata: Account<'info, TokenAccount>,
+    pub user_ata: UncheckedAccount<'info>,
+    /// CHECK: Mint account (needed for ATA creation)
+    pub mint: Account<'info, Mint>,
     /// 动态位图
     #[account(mut, seeds = [b"bitmap", quest.key().as_ref()], bump)]
     pub bitmap_shard: Account<'info, ClaimBitmapShard>,
     pub token_program: Program<'info, Token>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }

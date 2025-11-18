@@ -33,6 +33,15 @@ function parseSecret(json: string | undefined): Uint8Array {
     // 显式使用实际部署的 Program Id（避免 IDL.address 不一致）
     const program = new anchor.Program(idl as anchor.Idl, provider);
 
+    console.log('program.programId=', program.programId.toBase58());
+    console.log('programId=', programId);
+    console.log('merchantKp.publicKey=', merchantKp.publicKey.toBase58());
+    console.log('adminPubkey=', adminPubkey.toBase58());
+    console.log('mint=', mint.toBase58());
+    console.log('questId=', questId);
+    console.log('totalAmount=', totalAmount.toString());
+    console.log('message=', message);
+    console.log('signature=', signature);
     // Derive PDAs（quest_id 使用小端 LE 字节，与 on-chain to_le_bytes 对齐）
     const questIdLe = new Uint8Array(8);
     new DataView(questIdLe.buffer).setBigUint64(0, BigInt(questId), true);
@@ -57,6 +66,7 @@ function parseSecret(json: string | undefined): Uint8Array {
         signature,
     });
     const PROGRAM_ID = process.env.PROGRAM_ID || '';
+    console.log('PROGRAM_ID=', PROGRAM_ID);
     const [config] = anchor.web3.PublicKey.findProgramAddressSync(
         [Buffer.from('config')],
         new anchor.web3.PublicKey(PROGRAM_ID)

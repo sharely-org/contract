@@ -5,14 +5,8 @@ type Entry = { user: string; amount: string; index: number };
 
 // 示例名单：请替换为你的后端导出
 const entries: Entry[] = [
-    { user: 'EtLsnz8fRqQ8C54CVWx5gUBfDjKfXACVoHq9Cu3z6Z9n', amount: '2000000000', index: 0 },
-    { user: 'CECahCnakNKuoUrYkG6qc65wJjyq8yfMfmu9DTWng6uv', amount: '1000000000', index: 0 },
-    { user: 'GUZGH3UpGEB3nZjTwof1hBF7vvHyhynph4eK8cZapxeY', amount: '3000000000', index: 0 },
-    { user: '4Pip7ZdygfL5USc4m7Dm3aZMTHRAU5ESHt5JRny9fLmp', amount: '8000000000', index: 0 },
-    { user: 'HZv4acqsNcUBjkDkfaPjHVqudqXpWmvNeR6BoL9kM7ss', amount: '6000000000', index: 0 },
-    { user: '9W7dkPYMiYYdNwyABkoYCfFN5Tc2hJE23yVrHzpyQZ5N', amount: '1000000000', index: 0 },
-    { user: '2TVLhadCawcrfhdAUXxq5vEaZe6ckAsPcSZb38JWaFNT', amount: '2000000000', index: 0 },
-    { user: '5y9hEPFLKLodMArJQnLfwzCJyWZQ5uT2p3rd4tqmMCMZ', amount: '5000000000', index: 0 },
+    { user: '9rawhixqxFmBvD5pMwEonxYxKXSRpUVcDVnCqb71e2YF', amount: '389260000000', index: 0 },
+    { user: '4joBhqhv6YMvCBeQ8Lr5ESePXkmmZVKG8CohBS9TMFHs', amount: '211840000000', index: 0 },
 ];
 
 // 固定排序（建议：按 pubkey 升序）
